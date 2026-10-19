@@ -20,6 +20,7 @@ from typing import Dict, List
 from llm.client import SENT_END, strip_identity_opening
 from tts import cosyvoice as tts
 from tts.cosyvoice import push_sentence_pcm, pack_tts_utterances, tts_output_rate
+from tts.planner import UnitPlanner
 from tts.playback import PcmPlayClock
 from ws.hub import tts_fanout, attach_robot_id
 from robot.logutil import get_logger
@@ -97,29 +98,6 @@ async def push_robot_asr(query: str, session_id: str, robot_id: str,
     log.info("已推 asr session=%s robot=%s persona=%s clients=%s text=%s",
              session_id, rid, pid, n, text[:80])
     return n
-
-
-def pcm_sentence_spans(pcm: bytes, weights: List[int]) -> List[bytes]:
-    """按字数把一段 int16 PCM 切成和字幕对齐的片段。最后一段吃掉余数。"""
-    usable = len(pcm) - (len(pcm) % 2)
-    if usable <= 0 or not weights:
-        return []
-    total = sum(max(int(w), 1) for w in weights) or 1
-    spans: List[bytes] = []
-    start = 0
-    acc = 0
-    last = len(weights) - 1
-    for i, w in enumerate(weights):
-        acc += max(int(w), 1)
-        if i == last:
-            end = usable
-        else:
-            end = (int(usable * acc / total) // 2) * 2
-            if end < start:
-                end = start
-        spans.append(pcm[start:end])
-        start = end
-    return spans
 
 
 def split_speak_sentences(text: str) -> List[str]:
@@ -358,84 +336,51 @@ async def push_robot_turn_to_ws(speak_text: str, speaker: str,
                 seq += 1
                 chunk_sec = len(chunk) / 2.0 / float(sr)
                 await asyncio.sleep(max(0.0, chunk_sec * 0.85))
-        elif tts.cosyvoice_model and engine == "qwen3":
-            # 一轮讲稿只进一次 GPU。按逗号逐句克隆会把 6 秒参考音重算十几遍，
-            # 90 秒等不到 tts_end，下一轮直接 409。
-            full = "".join(sentences)
-            log.info("Qwen 整段合成 chars=%s sentences=%s persona=%s",
-                     len(full), len(sentences), pid)
-            pcm_bytes = b""
-            try:
-                pcm_bytes, sr = await asyncio.get_running_loop().run_in_executor(
-                    None,
-                    lambda text=full, who=persona_obj: tts.synthesize_speech_pcm(
-                        text, speaker, cancel_ev, persona=who))
-            except Exception as e:
-                skip_reason = "qwen_synth_fail"
-                log.exception("Qwen 整段合成失败 persona=%s err=%s", pid, e)
-                await fanout({
-                    "type": "error",
-                    "session_id": session_id,
-                    "message": "Qwen3-TTS 合成失败: %s" % e,
-                })
-            if not pcm_bytes:
-                if not skip_reason:
-                    skip_reason = "qwen_empty"
-                log.warning("Qwen 整段无 PCM persona=%s chars=%s", pid, len(full))
-                for sent in sentences:
-                    await fanout({
-                        "type": "tts_sentence",
-                        "session_id": session_id,
-                        "index": sent_idx,
-                        "text": sent,
-                    })
+        elif tts.cosyvoice_model:
+            # 推送不等播放，推完立刻合成下一段。CosyVoice3 / Qwen3-TTS 每次调用都要重算参考音前缀：
+            # Unity 缓冲少时只送一个小句，缓冲够再拼长；Qwen 排着的几段一次 batch。
+            # 不要退回整段一次合成：talker 逐帧自回归，150 字要串行跑四五百帧，首句等太久。
+            from config import QWEN_TTS_BATCH
+            loop = asyncio.get_running_loop()
+            planner = UnitPlanner(tts.clause_merge_chars())
+            max_units = QWEN_TTS_BATCH if engine == "qwen3" else 1
+            backlog = list(sentences)
+            bps = 2.0 * float(sr)
+            any_pcm = False
+            while backlog and not cancelled:
+                ahead = play_clock.remain(tail=0.0)
+                units = planner.take(backlog, ahead, max_units=max_units)
+                batch_sec = None
+                if len(units) > 1 and not cancel_ev.is_set():
+                    t_pre = time.time()
+                    n_ok = await loop.run_in_executor(
+                        None, lambda texts=list(units): tts.prefetch_batch(
+                            texts, speaker, cancel_ev, persona=persona_obj))
+                    log.info("Qwen 批量预取 %s/%s 段 %.2fs ahead=%.2fs persona=%s",
+                             n_ok, len(units), time.time() - t_pre, ahead, pid)
+                    if n_ok == len(units):
+                        batch_sec = time.time() - t_pre
+                measured = []
+                for sent in units:
+                    pcm_before = len(pcm_buf)
+                    t_push = time.time()
+                    seq, cancelled = await push_sentence_pcm(
+                        None, fanout, sent, speaker, session_id, seq, cancel_ev,
+                        subtitle_text=sent, subtitle_index=sent_idx, on_pcm=on_pcm,
+                        persona=persona_obj)
+                    added = len(pcm_buf) - pcm_before
+                    measured.append((len(sent), added / bps, time.time() - t_push))
+                    if added <= 0:
+                        log.warning("句子无 PCM idx=%s persona=%s engine=%s err=%s text=%s",
+                                    sent_idx, pid, engine, tts._tts_last_error or "-", sent[:40])
+                    else:
+                        any_pcm = True
                     sent_idx += 1
-            else:
-                spans = pcm_sentence_spans(pcm_bytes, [len(s) for s in sentences])
-                chunk_size = tts._pcm_chunk_size()
-                for sent, span in zip(sentences, spans):
-                    await fanout({
-                        "type": "tts_sentence",
-                        "session_id": session_id,
-                        "index": sent_idx,
-                        "text": sent,
-                    })
-                    sent_idx += 1
-                    offset = 0
-                    while offset < len(span):
-                        if cancel_ev.is_set():
-                            cancelled = True
-                            break
-                        chunk = span[offset:offset + chunk_size]
-                        offset += chunk_size
-                        if not chunk:
-                            continue
-                        on_pcm(chunk)
-                        await fanout({
-                            "type": "tts_chunk",
-                            "session_id": session_id,
-                            "seq": seq,
-                            "data": base64.b64encode(chunk).decode(),
-                        })
-                        seq += 1
-                        chunk_sec = len(chunk) / 2.0 / float(sr or 24000)
-                        await asyncio.sleep(max(0.0, chunk_sec * 0.85))
                     if cancelled:
                         break
-        elif tts.cosyvoice_model:
-            for sent in sentences:
-                pcm_before = len(pcm_buf)
-                seq, cancelled = await push_sentence_pcm(
-                    None, fanout, sent, speaker, session_id, seq, cancel_ev,
-                    subtitle_text=sent, subtitle_index=sent_idx, on_pcm=on_pcm,
-                    persona=persona_obj)
-                added = len(pcm_buf) - pcm_before
-                if added <= 0:
-                    log.warning("句子无 PCM idx=%s persona=%s engine=%s err=%s text=%s",
-                                sent_idx, pid, engine, tts._tts_last_error or "-", sent[:40])
-                sent_idx += 1
-                if cancelled:
-                    break
+                planner.observe_round(measured, batch_sec)
+            if engine == "qwen3" and not any_pcm and not skip_reason:
+                skip_reason = "qwen_empty"
         else:
             from tts.engine import tts_engine_name
             engine = tts_engine_name()

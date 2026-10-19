@@ -21,7 +21,9 @@ from rag import index as rag
 from rag.search import search as search_fn, works_answer_hint
 from tts.cosyvoice import push_sentence_pcm, tts_output_rate
 from tts import cosyvoice as tts
+from tts.engine import tts_engine_name
 from tts.playback import PcmPlayClock
+from tts.planner import UnitPlanner
 from ws.hub import tts_fanout, attach_robot_id, accept_websocket
 from ws.session_wire import tts_wire_allowed
 from robot.hub import robot_hub
@@ -131,11 +133,20 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
         pending = ""
         pending_idx = None
 
+    # CosyVoice3 / Qwen3-TTS 整句出声：小句原样入队，由合成协程按客户端缓冲决定拼多少、批多少。
+    merge_chars = tts.clause_merge_chars()
+    qwen_batch = tts_engine_name() == "qwen3"
+    planned = bool(merge_chars) or qwen_batch
+
     async def send_subtitle(sent: str):
         """标点即切、立刻入队。首句和尾句都要单独合成，禁止粘包截尾。"""
         nonlocal pending, pending_idx, first_clause
         sent = (sent or "").strip()
         if not sent:
+            return
+        if planned:
+            await ensure_started(sent)
+            await audio_queue.put(sent)
             return
         if first_clause:
             if pending:
@@ -168,7 +179,9 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
         if not model_ok:
             audio_skip_reason = "cosyvoice_not_loaded"
             print(f"❌ 不下发 tts_chunk：CosyVoice 未加载 err={tts._tts_last_error or '-'}")
-        while True:
+        if planned:
+            last_item = await planned_worker(model_ok)
+        while not planned:
             item = await audio_queue.get()
             if item is None:
                 break
@@ -194,6 +207,74 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
                 break
         if last_item is not None and not last_pcm_ok:
             print(f"⚠️ 本轮最后一句没有声音 session={session_id[:8]} '{last_item[0][:30]}'")
+
+    async def planned_worker(model_ok: bool):
+        """整句出声引擎：推送不等播放，推完立刻合成下一段。
+
+        客户端缓冲少时只送一个小句，缓冲够再把后面的小句拼长；Qwen3-TTS 把排着的几段一次 batch。
+        """
+        nonlocal seq, cancelled, last_pcm_ok, sent_idx
+        planner = UnitPlanner(merge_chars)
+        backlog = []
+        eof = False
+        last_item = None
+        bps = 2.0 * float(tts_output_rate())
+        while True:
+            if not backlog and not eof:
+                item = await audio_queue.get()
+                if item is None:
+                    eof = True
+                else:
+                    backlog.append(item)
+            while not eof and not audio_queue.empty():
+                item = audio_queue.get_nowait()
+                if item is None:
+                    eof = True
+                else:
+                    backlog.append(item)
+            if not backlog:
+                break
+            ahead = play_clock.remain(tail=0.0)
+            units = planner.take(backlog, ahead,
+                                 max_units=QWEN_TTS_BATCH if qwen_batch and model_ok else 1)
+            items = []
+            for text in units:
+                items.append((text, sent_idx))
+                sent_idx += 1
+            if not model_ok:
+                for sent, s_idx in items:
+                    last_item = (sent, s_idx)
+                    await gated_send({"type": "tts_sentence", "session_id": session_id,
+                                      "index": s_idx, "text": sent})
+                last_pcm_ok = False
+                continue
+            batch_sec = 0.0
+            batched = False
+            if len(units) > 1 and not cancel_ev.is_set():
+                t_pre = time.time()
+                n_ok = await loop.run_in_executor(
+                    None, lambda texts=list(units): tts.prefetch_batch(
+                        texts, speaker, cancel_ev, persona=persona))
+                batch_sec = time.time() - t_pre
+                batched = n_ok == len(units)
+                print(f"⚡ Qwen 批量预取 {n_ok}/{len(units)} 段 {batch_sec:.2f}s "
+                      f"ahead={ahead:.2f}s session={session_id[:8]}")
+            measured = []
+            for sent, s_idx in items:
+                last_item = (sent, s_idx)
+                before = pcm_bytes_sent
+                t_push = time.time()
+                seq, cancelled = await push_sentence_pcm(
+                    websocket, gated_send, sent, speaker, session_id, seq, cancel_ev,
+                    subtitle_text=sent, subtitle_index=s_idx, on_pcm=on_pcm, persona=persona)
+                measured.append((len(sent), (pcm_bytes_sent - before) / bps, time.time() - t_push))
+                last_pcm_ok = pcm_bytes_sent > before
+                if not last_pcm_ok:
+                    print(f"⚠️ 末句/该句无 PCM idx={s_idx} persona={getattr(persona, 'id', '')} '{sent[:30]}'")
+                if cancelled:
+                    return last_item
+            planner.observe_round(measured, batch_sec if batched else None)
+        return last_item
 
     audio_task = asyncio.create_task(audio_worker())
 

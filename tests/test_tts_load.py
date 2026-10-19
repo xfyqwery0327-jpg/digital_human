@@ -362,16 +362,17 @@ def test_stream_hop_grows_then_resets():
     assert model.token_hop_len == 2
 
 
-def test_qwen_turn_is_one_pcm_sliced_by_sentence():
-    from robot.stream import pcm_sentence_spans
-    pcm = b"\x01\x00" * 100
-    spans = pcm_sentence_spans(pcm, [1, 1, 2])
-    assert [len(s) for s in spans] == [50, 50, 100]
-    assert b"".join(spans) == pcm
+def test_robot_turn_plans_units_by_client_buffer():
     src = (SERVER9 / "robot" / "stream.py").read_text(encoding="utf-8")
-    branch = src.split('engine == "qwen3"')[1].split("elif tts.cosyvoice_model:")[0]
-    assert "synthesize_speech_pcm" in branch
-    assert "push_sentence_pcm" not in branch
+    assert 'engine == "qwen3":' not in src
+    branch = src.split("elif tts.cosyvoice_model:")[1].split("        else:")[0]
+    assert "planner.take(backlog, ahead" in branch
+    assert "play_clock.remain(tail=0.0)" in branch
+    assert "tts.prefetch_batch" in branch
+    assert "push_sentence_pcm" in branch
+    # 推送不等播放：句间节拍只由客户端缓冲决定。
+    assert "asyncio.sleep" not in branch
+    assert "synthesize_speech_pcm" not in branch
 
 
 def test_cv3_prompt_keeps_transcript_out_of_spoken_text():
