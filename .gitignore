@@ -1,0 +1,20 @@
+# 权重和打包文件，体积超过 GitHub 单文件限制
+models/
+*.gguf
+*.rar
+
+# 本机环境与运行时
+.venv-kb/
+logs/
+sessions/
+out/
+__pycache__/
+*.pyc
+.pytest_cache/
+projectsdigital_human.pytest-tmp/
+
+# 编辑器与外部仓库链接
+.cursor/
+.codegraph/
+CosyVoice/
+CosyVoice.lnk

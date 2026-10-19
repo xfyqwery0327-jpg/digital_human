@@ -1,0 +1,3 @@
+llm=8
+tts=cosyvoice
+cosyvoice=3

@@ -1,0 +1,14 @@
+[Unit]
+Description=Monet Digital Guide (莫奈数字讲解员)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/monet
+ExecStart=/usr/bin/python3 /opt/monet/server8.py
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

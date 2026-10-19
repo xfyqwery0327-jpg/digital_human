@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>知识库工作台</title>
+  <style>
+    :root {
+      --bg: #161410;
+      --panel: #1f1b16;
+      --line: #3a342c;
+      --text: #efe7d8;
+      --muted: #9a8f7d;
+      --accent: #c4a574;
+      --accent-2: #8f6b3e;
+      --danger: #c45c4a;
+      --ok: #7a9e6a;
+      --chip: #2a251f;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 15px/1.5 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+    button, input, textarea, select { font: inherit; color: inherit; }
+    #app { display: grid; grid-template-columns: 260px 1fr; min-height: 100%; }
+    aside {
+      border-right: 1px solid var(--line);
+      padding: 22px 16px;
+      background: #1a1612;
+    }
+    .brand { font-size: 13px; letter-spacing: 0.18em; color: var(--accent); text-transform: uppercase; }
+    h1 { font-size: 20px; font-weight: 600; margin: 8px 0 20px; }
+    .p-card {
+      width: 100%; text-align: left; background: var(--chip); border: 1px solid var(--line);
+      border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; cursor: pointer;
+    }
+    .p-card.active { border-color: var(--accent); background: #2c261e; }
+    .p-card .name { font-size: 16px; }
+    .p-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--muted); }
+    .dot.on { background: var(--ok); }
+    .dot.warn { background: var(--accent); }
+    main { padding: 22px 28px 40px; max-width: 1100px; }
+    .topbar { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 18px; }
+    .hint { color: var(--muted); font-size: 13px; }
+    .status {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 18px;
+    }
+    .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+    .stat b { display: block; font-size: 18px; font-weight: 600; margin-top: 4px; }
+    .stat span { color: var(--muted); font-size: 12px; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+    .tab {
+      background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 8px 16px; cursor: pointer;
+    }
+    .tab.on { background: var(--accent-2); border-color: var(--accent-2); }
+    .box { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+    .drop {
+      border: 1px dashed var(--accent-2); border-radius: 10px; padding: 28px; text-align: center; color: var(--muted);
+      background: #1a1713;
+    }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
+    .btn {
+      background: var(--accent-2); border: 0; border-radius: 8px; padding: 10px 16px; cursor: pointer; min-height: 44px;
+    }
+    .btn.ghost { background: transparent; border: 1px solid var(--line); }
+    .btn.danger { background: var(--danger); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    textarea, input[type=text], input[type=password] {
+      width: 100%; background: #14110e; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { border-bottom: 1px solid var(--line); padding: 8px 6px; text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-weight: 500; }
+    .flash { padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; display: none; }
+    .flash.err { display: block; background: #3a221c; color: #f0c2b8; }
+    .flash.ok { display: block; background: #22301e; color: #c5e0b8; }
+    .files { color: var(--muted); font-size: 13px; }
+    .files li { margin: 4px 0; }
+    #tokenBar { display: none; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <aside>
+      <div class="brand">Digital Guide</div>
+      <h1>知识库工作台</h1>
+      <div id="plist"></div>
+    </aside>
+    <main>
+      <div id="flash" class="flash"></div>
+      <div id="tokenBar" class="box">
+        <label>本机已配置接口令牌，请填写后继续</label>
+        <div class="row">
+          <input id="token" type="password" placeholder="X-Robot-Token" />
+          <button class="btn" type="button" onclick="saveToken()">保存令牌</button>
+        </div>
+      </div>
+      <div class="topbar">
+        <div>
+          <div id="title">选择数字人</div>
+          <div class="hint" id="sub">类目锁定 · 先预览再发布</div>
+        </div>
+        <div class="hint" id="stage">舞台：—</div>
+      </div>
+      <div class="status" id="stats"></div>
+      <div class="tabs">
+        <button class="tab on" id="tabA" type="button" onclick="showTab('a')">上传原文</button>
+        <button class="tab" id="tabB" type="button" onclick="showTab('b')">上传索引包</button>
+      </div>
+      <section id="paneA" class="box">
+        <div class="drop" id="drop">把 txt / md / docx / pdf 拖到这里，或点击选择文件
+          <input id="file" type="file" multiple accept=".txt,.md,.docx,.pdf,.csv" hidden />
+        </div>
+        <div class="row">
+          <button class="btn" type="button" onclick="document.getElementById('file').click()">选择文件</button>
+          <button class="btn ghost" type="button" onclick="uploadFiles()">上传</button>
+        </div>
+        <p class="hint">也可直接粘贴一段讲解稿：</p>
+        <input id="pasteTitle" type="text" placeholder="标题，例如 妇好墓出土器物" />
+        <textarea id="pasteText" rows="4" placeholder="粘贴原文…" style="margin-top:8px"></textarea>
+        <div class="row">
+          <button class="btn ghost" type="button" onclick="pasteText()">保存粘贴</button>
+          <button class="btn" type="button" onclick="parseNow()">解析预览</button>
+          <button class="btn" type="button" id="btnBuild" onclick="buildNow()">生成索引（草稿）</button>
+        </div>
+        <ul class="files" id="sources"></ul>
+      </section>
+      <section id="paneB" class="box" style="display:none">
+        <p class="hint">上传包含 faiss.index、items.json、faiss_map.json、bm25.pkl 的 zip。适合已在其他机器建好的库。</p>
+        <input id="zip" type="file" accept=".zip" />
+        <div class="row">
+          <button class="btn" type="button" onclick="uploadPack()">上传为草稿</button>
+        </div>
+      </section>
+      <section class="box">
+        <div class="hint">切块预览</div>
+        <div style="max-height:280px;overflow:auto;margin-top:8px">
+          <table>
+            <thead><tr><th>标题</th><th>来源</th><th>字数</th><th>摘要</th></tr></thead>
+            <tbody id="tbody"></tbody>
+          </table>
+        </div>
+      </section>
+      <section class="box">
+        <div class="hint">试检索</div>
+        <div class="row">
+          <input id="q" type="text" placeholder="问一句展品问题" style="flex:1" />
+          <button class="btn ghost" type="button" onclick="trySearch()">检索</button>
+        </div>
+        <div id="hits" class="files"></div>
+      </section>
+      <div class="row">
+        <button class="btn" type="button" onclick="publishNow()">发布到舞台</button>
+        <button class="btn ghost" type="button" onclick="rollbackNow()">回滚上一版</button>
+      </div>
+    </main>
+  </div>
+  <script>
+    let pid = "monet";
+    let meta = {};
+    let pendingFiles = [];
+
+    function headers() {
+      const h = {};
+      const t = localStorage.getItem("kb_token") || "";
+      if (t) h["X-Robot-Token"] = t;
+      return h;
+    }
+    function flash(msg, ok) {
+      const el = document.getElementById("flash");
+      el.className = "flash " + (ok ? "ok" : "err");
+      el.textContent = msg;
+    }
+    async function api(url, opt) {
+      const r = await fetch(url, Object.assign({ headers: headers() }, opt || {}));
+      const data = await r.json().catch(() => ({ detail: r.statusText }));
+      if (!r.ok) throw new Error(data.detail || JSON.stringify(data));
+      return data;
+    }
+    function saveToken() {
+      localStorage.setItem("kb_token", document.getElementById("token").value.trim());
+      boot();
+    }
+    function showTab(which) {
+      document.getElementById("paneA").style.display = which === "a" ? "block" : "none";
+      document.getElementById("paneB").style.display = which === "b" ? "block" : "none";
+      document.getElementById("tabA").classList.toggle("on", which === "a");
+      document.getElementById("tabB").classList.toggle("on", which === "b");
+    }
+    function stateLabel(s) {
+      return { empty: "空库", sources: "已有原文", preview: "已预览", draft: "草稿待发布", live: "已上线" }[s] || s;
+    }
+    async function boot() {
+      try {
+        meta = await api("/admin/kb/meta");
+      } catch (e) {
+        document.getElementById("tokenBar").style.display = "block";
+        flash(e.message, false);
+        return;
+      }
+      document.getElementById("tokenBar").style.display = meta.token_required && !localStorage.getItem("kb_token") ? "block" : "none";
+      document.getElementById("stage").textContent = "舞台：" + meta.current_persona_id;
+      const box = document.getElementById("plist");
+      box.innerHTML = "";
+      (meta.personas || []).forEach(p => {
+        const b = document.createElement("button");
+        b.className = "p-card" + (p.id === pid ? " active" : "");
+        b.innerHTML = `<div class="name">${p.display_name}</div>
+          <div class="meta"><span class="dot ${p.knowledge_ready ? "on" : "warn"}"></span>${p.id} · ${p.knowledge_ready ? "知识就绪" : "缺知识"}</div>`;
+        b.onclick = () => { pid = p.id; refresh(); };
+        box.appendChild(b);
+      });
+      if (!meta.can_build) {
+        document.getElementById("btnBuild").disabled = true;
+        document.getElementById("btnBuild").title = meta.build_hint || "";
+      }
+      await refresh();
+    }
+    async function refresh() {
+      const st = await api("/admin/kb/" + pid + "/status");
+      document.getElementById("title").textContent = st.display_name + " 的知识库";
+      document.getElementById("sub").textContent = "锁定类目 " + st.category + " · 状态 " + stateLabel(st.state);
+      document.getElementById("stats").innerHTML = [
+        ["状态", stateLabel(st.state)],
+        ["原文", st.sources.length + " 个"],
+        ["切块", st.chunk_count + " 条"],
+        ["线上条目", st.live_items + " 条"]
+      ].map(([k,v]) => `<div class="stat"><span>${k}</span><b>${v}</b></div>`).join("");
+      const ul = document.getElementById("sources");
+      ul.innerHTML = st.sources.map(s => `<li>${s.name} · ${(s.bytes/1024).toFixed(1)} KB <a href="#" onclick="delSrc('${s.name}');return false">删除</a></li>`).join("") || "<li>还没有原文</li>";
+      const tb = document.getElementById("tbody");
+      tb.innerHTML = (st.chunks || []).map(c => `<tr><td>${c.title}</td><td>${c.source}</td><td>${c.chars}</td><td>${c.text}</td></tr>`).join("");
+    }
+    async function delSrc(name) {
+      await api("/admin/kb/" + pid + "/sources/" + encodeURIComponent(name), { method: "DELETE" });
+      await refresh();
+    }
+    const drop = document.getElementById("drop");
+    const file = document.getElementById("file");
+    drop.onclick = () => file.click();
+    drop.ondragover = e => { e.preventDefault(); };
+    drop.ondrop = e => { e.preventDefault(); pendingFiles = [...e.dataTransfer.files]; drop.textContent = "已选 " + pendingFiles.length + " 个文件"; };
+    file.onchange = () => { pendingFiles = [...file.files]; drop.textContent = "已选 " + pendingFiles.length + " 个文件"; };
+    async function uploadFiles() {
+      const list = pendingFiles.length ? pendingFiles : [...file.files];
+      if (!list.length) return flash("请先选择文件", false);
+      const fd = new FormData();
+      list.forEach(f => fd.append("files", f));
+      const r = await fetch("/admin/kb/" + pid + "/sources", { method: "POST", headers: headers(), body: fd });
+      const data = await r.json();
+      if (!r.ok) throw flash(data.detail || "上传失败", false);
+      flash("已上传 " + (data.saved || []).join("、"), true);
+      await refresh();
+    }
+    async function pasteText() {
+      const body = JSON.stringify({
+        title: document.getElementById("pasteTitle").value || "现场粘贴",
+        text: document.getElementById("pasteText").value
+      });
+      await api("/admin/kb/" + pid + "/paste", { method: "POST", headers: Object.assign({ "Content-Type": "application/json" }, headers()), body });
+      flash("粘贴稿已保存", true);
+      await refresh();
+    }
+    async function parseNow() {
+      const data = await api("/admin/kb/" + pid + "/parse", { method: "POST" });
+      const tb = document.getElementById("tbody");
+      tb.innerHTML = (data.chunks || []).map(c => `<tr><td>${c.title}</td><td>${c.source}</td><td>${c.chars}</td><td>${c.text}</td></tr>`).join("");
+      flash("解析出 " + data.count + " 块" + (data.errors && data.errors.length ? "，部分文件失败" : ""), true);
+      await refresh();
+    }
+    async function buildNow() {
+      const data = await api("/admin/kb/" + pid + "/build", { method: "POST" });
+      flash("草稿已生成，共 " + data.count + " 条", true);
+      await refresh();
+    }
+    async function uploadPack() {
+      const f = document.getElementById("zip").files[0];
+      if (!f) return flash("请选择 zip", false);
+      const fd = new FormData();
+      fd.append("file", f);
+      const r = await fetch("/admin/kb/" + pid + "/pack", { method: "POST", headers: headers(), body: fd });
+      const data = await r.json();
+      if (!r.ok) return flash(data.detail || "上传失败", false);
+      flash("索引包已作为草稿，共 " + data.count + " 条", true);
+      await refresh();
+    }
+    async function trySearch() {
+      const q = document.getElementById("q").value;
+      const data = await api("/admin/kb/" + pid + "/try-search", {
+        method: "POST",
+        headers: Object.assign({ "Content-Type": "application/json" }, headers()),
+        body: JSON.stringify({ query: q })
+      });
+      document.getElementById("hits").innerHTML = (data.results || []).map(h => `<li><b>${h.title || ""}</b> ${h.score || ""} ${h.text || ""}</li>`).join("") || "<li>没有命中</li>";
+      if (data.hint) flash(data.hint, true);
+    }
+    async function publishNow() {
+      const data = await api("/admin/kb/" + pid + "/publish", { method: "POST" });
+      flash(data.message || "已发布", true);
+      await boot();
+    }
+    async function rollbackNow() {
+      await api("/admin/kb/" + pid + "/rollback", { method: "POST" });
+      flash("已回滚上一版", true);
+      await boot();
+    }
+    boot().catch(e => flash(e.message, false));
+  </script>
+</body>
+</html>

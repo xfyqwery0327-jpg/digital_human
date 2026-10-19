@@ -1,0 +1,14 @@
+{
+  "host": "127.0.0.1",
+  "port": 8080,
+  "chat_format": "chatml",
+  "interrupt_requests": false,
+  "models": [
+    {
+      "model": "models/Qwen3-8B-Q4_K_M.gguf",
+      "model_alias": "qwen3",
+      "n_gpu_layers": -1,
+      "n_ctx": 2048
+    }
+  ]
+}
