@@ -726,6 +726,8 @@ def _yield_tts_stream(model, model_input: dict, hop: int = _STREAM_HOP,
             model.hift_cache_dict.pop(this_uuid, None)
         if hasattr(model, "token_hop_len"):
             model.token_hop_len = hop
+        from tts.cuda_cache import release_cuda_cache
+        release_cuda_cache("cv2-sentence", tight=True)
 
 
 def _cv3_prompt_string(transcript: str) -> str:
@@ -826,6 +828,8 @@ def _yield_tts_once(model, model_input: dict, join_sec: float = 90.0):
             raise err["e"]
     finally:
         _drop_tts_session(model, this_uuid)
+        from tts.cuda_cache import release_cuda_cache
+        release_cuda_cache("cv3-sentence", tight=True)
 
 
 def _embedding_only_gen(text: str, persona_id: str = ""):

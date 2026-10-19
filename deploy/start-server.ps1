@@ -71,6 +71,10 @@ try {
     $env:PYTHONUTF8 = "1"
     $env:PYTHONIOENCODING = "utf-8"
     $env:PYTHONPATH = Join-Path $Root "server9"
+    # 不同 batch / 句长的显存块尽量接在同一段上，避免每种尺寸各占一块、只升不降。
+    if (-not $env:PYTORCH_CUDA_ALLOC_CONF) {
+        $env:PYTORCH_CUDA_ALLOC_CONF = "expandable_segments:True"
+    }
     $env:MONET_HOST = "0.0.0.0"
     $env:MONET_PORT = "8848"
     if (-not $env:COSYVOICE_PATH) {
@@ -152,7 +156,8 @@ try {
         "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1\bin"
     ) | Where-Object { $_ -and (Test-Path $_) }
     $env:PATH = ($CondaEnv + ";" + ($extras -join ";") + ";" + $env:PATH)
-    Write-Boot ("python=" + $Python + " tts=" + $env:TTS_ENGINE + " cosyvoice=" + $env:COSYVOICE_PATH)
+    Write-Boot ("python=" + $Python + " tts=" + $env:TTS_ENGINE + " alloc=" + $env:PYTORCH_CUDA_ALLOC_CONF)
+    Write-Boot ("cosyvoice_path=" + $env:COSYVOICE_PATH)
     Write-Boot ("cosyvoice=" + $choice + " model=" + $env:COSYVOICE_MODEL)
     if ($env:TTS_ENGINE -eq "qwen3") {
         Write-Boot ("qwen3=" + $env:QWEN_TTS_MODEL)

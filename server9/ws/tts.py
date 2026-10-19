@@ -440,12 +440,21 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
         await audio_queue.put(None)
         await audio_task
 
+        release_fut = None
+        if not tts._remote_on():
+            from tts.cuda_cache import release_cuda_cache
+            release_fut = loop.run_in_executor(None, release_cuda_cache, "ws-turn")
         duration = play_clock.duration or (
             pcm_bytes_sent / 2.0 / float(tts_output_rate()) if pcm_bytes_sent else 0.0)
         remain = play_clock.remain()
         if remain > 0.05 and not cancelled and not cancel_ev.is_set():
             print(f"等播完再 tts_end remain={remain:.2f}s pcm={duration:.2f}s session={session_id[:8]}")
             await asyncio.sleep(remain)
+        if release_fut is not None:
+            try:
+                await release_fut
+            except Exception as rel_err:
+                print(f"⚠️ 释放 Qwen CUDA 缓存失败: {rel_err}")
 
         try:
             await _emit_tts_end()
@@ -466,9 +475,18 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
             await audio_queue.put(None)
             await audio_task
             cancelled = True
+            release_fut = None
+            if not tts._remote_on():
+                from tts.cuda_cache import release_cuda_cache
+                release_fut = loop.run_in_executor(None, release_cuda_cache, "ws-turn-error")
             remain = play_clock.remain()
             if remain > 0.05 and not cancel_ev.is_set():
                 await asyncio.sleep(min(remain, 8.0))
+            if release_fut is not None:
+                try:
+                    await release_fut
+                except Exception as rel_err:
+                    print(f"⚠️ 释放 Qwen CUDA 缓存失败: {rel_err}")
             await _emit_tts_end()
         except Exception:
             pass

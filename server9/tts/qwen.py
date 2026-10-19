@@ -112,6 +112,18 @@ def _reset_talker_cache(model) -> None:
                     pass
 
 
+def _detach_prompt(item):
+    """参考音只建一次。张量断开计算图，避免预处理结果被意外留在梯度链上。"""
+    import torch
+    items = item if isinstance(item, (list, tuple)) else [item]
+    for one in items:
+        for name in ("ref_code", "ref_spk_embedding"):
+            val = getattr(one, name, None)
+            if isinstance(val, torch.Tensor):
+                setattr(one, name, val.detach())
+    return item
+
+
 def _prompt_for(model, persona):
     tts = getattr(persona, "tts", None) if persona is not None else None
     wav = (getattr(tts, "prompt_wav", None) or "").strip()
@@ -124,14 +136,20 @@ def _prompt_for(model, persona):
         cached = _prompts.get(key)
     if cached is not None:
         return cached
-    item = model.create_voice_clone_prompt(
+    item = _detach_prompt(model.create_voice_clone_prompt(
         ref_audio=wav,
         ref_text=ref,
         x_vector_only_mode=not bool(ref),
-    )
+    ))
     with _lock:
         _prompts[key] = item
     return item
+
+
+def release_cuda_cache(reason: str = "") -> None:
+    """一轮结束时归还空闲缓存。句与句之间的快满检查在 cuda_cache。"""
+    from tts.cuda_cache import release_cuda_cache as _release
+    _release(reason)
 
 
 def _trim(pcm: bytes, rate: int) -> bytes:
@@ -160,7 +178,10 @@ def _generate(pieces, persona):
             )
         finally:
             _reset_talker_cache(_model)
-    return _unpack_wavs(generated)
+    wavs = _unpack_wavs(generated)
+    from tts.cuda_cache import release_cuda_cache
+    release_cuda_cache("qwen-batch", tight=True)
+    return wavs
 
 
 def _to_pcm(audio, rate: int) -> bytes:
@@ -282,6 +303,7 @@ def _unpack_wavs(generated):
 def activate() -> bool:
     """加载本地 Base 权重，并把占位对象交给 tts.cosyvoice。失败不抛到启动流程外。"""
     global _model, _sample_rate, _last_error
+    import os
     import tts.cosyvoice as cv
     from config import ENABLE_AUDIO_CACHE, AUDIO_CACHE_SIZE, TTS_MAX_WORKERS
     from concurrent.futures import ThreadPoolExecutor
@@ -313,7 +335,8 @@ def activate() -> bool:
             cv.tts_executor = ThreadPoolExecutor(max_workers=TTS_MAX_WORKERS)
         if ENABLE_AUDIO_CACHE and cv.audio_cache is None:
             cv.audio_cache = AudioCache(max_size=AUDIO_CACHE_SIZE)
-        cv._tts_log("[TTS] qwen3 model=%s sr=%s" % (model_dir, _sample_rate))
+        cv._tts_log("[TTS] qwen3 model=%s sr=%s alloc=%s" % (
+            model_dir, _sample_rate, os.environ.get("PYTORCH_CUDA_ALLOC_CONF") or "-"))
         print("✅ Qwen3-TTS 已加载 %s sr=%s" % (model_dir, _sample_rate))
         return True
     except Exception as e:

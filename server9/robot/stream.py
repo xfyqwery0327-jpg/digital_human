@@ -410,6 +410,11 @@ async def push_robot_turn_to_ws(speak_text: str, speaker: str,
             log.exception("推送 error 失败 session=%s persona=%s", session_id, pid)
         cancelled = True
 
+    release_fut = None
+    if not tts._remote_on():
+        from tts.cuda_cache import release_cuda_cache
+        release_fut = asyncio.get_running_loop().run_in_executor(
+            None, release_cuda_cache, "robot-turn")
     duration = play_clock.duration or (
         (len(pcm_buf) / 2.0 / float(sr)) if pcm_buf else 0.0)
     remain = play_clock.remain()
@@ -417,6 +422,11 @@ async def push_robot_turn_to_ws(speak_text: str, speaker: str,
         log.info("等播报结束再 tts_end remain=%.2fs pcm=%.2fs session=%s persona=%s",
                  remain, duration, session_id, pid)
         await asyncio.sleep(remain)
+    if release_fut is not None:
+        try:
+            await release_fut
+        except Exception:
+            log.exception("释放 Qwen CUDA 缓存失败 session=%s", session_id)
 
     end = {
         "type": "tts_end",
