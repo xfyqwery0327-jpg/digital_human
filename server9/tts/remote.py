@@ -52,15 +52,18 @@ def speaker_id_of(persona, speaker: str = "") -> str:
     return speaker or "monet"
 
 
-def synthesize_pcm(text: str, speaker_id: str, cancel_ev=None, timeout: float = 90) -> tuple:
-    """返回 (pcm_bytes, sample_rate)。连接失败重试两次，覆盖监督进程刚拉起的空档。"""
+def iter_pcm(text: str, speaker_id: str, cancel_ev=None, timeout: float = 90):
+    """边收边吐 (pcm_chunk, sample_rate)，chunk 长度保证是偶数字节。
+
+    连接失败重试两次，覆盖监督进程刚拉起的空档；已经吐过数据就不再重试，避免重复念。
+    """
     import requests
     url = remote_base() + "/v1/tts"
     body = {"text": text, "speaker_id": speaker_id, "format": "pcm", "stream": True}
     last = None
     for attempt in range(3):
-        buf = bytearray()
         odd = b""
+        yielded = False
         try:
             with requests.post(url, json=body, stream=True, timeout=(3, timeout)) as resp:
                 if resp.status_code >= 400:
@@ -68,7 +71,7 @@ def synthesize_pcm(text: str, speaker_id: str, cancel_ev=None, timeout: float = 
                 sr = int(resp.headers.get("X-Sample-Rate") or 24000)
                 for chunk in resp.iter_content(4096):
                     if cancel_ev is not None and cancel_ev.is_set():
-                        break
+                        return
                     if not chunk:
                         continue
                     if odd:
@@ -77,9 +80,22 @@ def synthesize_pcm(text: str, speaker_id: str, cancel_ev=None, timeout: float = 
                     if len(chunk) % 2:
                         odd = chunk[-1:]
                         chunk = chunk[:-1]
-                    buf.extend(chunk)
-            return bytes(buf), sr
+                    if chunk:
+                        yielded = True
+                        yield chunk, sr
+            return
         except (requests.ConnectionError, requests.Timeout) as exc:
+            if yielded:
+                raise RuntimeError(f"独立 TTS 中途断开: {exc}") from exc
             last = exc
             time.sleep(1.0 + attempt)
     raise RuntimeError(f"独立 TTS 不可用（可能正在空闲重启）: {last}") from last
+
+
+def synthesize_pcm(text: str, speaker_id: str, cancel_ev=None, timeout: float = 90) -> tuple:
+    """返回 (pcm_bytes, sample_rate)。"""
+    buf = bytearray()
+    sr = 24000
+    for chunk, sr in iter_pcm(text, speaker_id, cancel_ev, timeout):
+        buf.extend(chunk)
+    return bytes(buf), sr

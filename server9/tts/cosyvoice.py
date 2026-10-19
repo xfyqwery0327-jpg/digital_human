@@ -170,6 +170,28 @@ def ensure_cosyvoice_loaded() -> bool:
     return cosyvoice_model is not None
 
 
+def clause_merge_chars() -> int:
+    """>0 时相邻小句拼到这个字数再合成。
+
+    CosyVoice3（本地 / 独立进程）和 Qwen3-TTS 都是整句出声，每次调用固定要重算参考音前缀，
+    逗号一句一调会让句间空档等于整句合成耗时。CosyVoice2 走 hop 流式，保持逐小句。
+    """
+    if not TTS_MERGE_CHARS:
+        return 0
+    from tts.engine import use_qwen_tts
+    if use_qwen_tts() or _remote_on() or _cosyvoice3_loaded():
+        return TTS_MERGE_CHARS
+    if cosyvoice_model is None and "cosyvoice3" in str(COSYVOICE_MODEL).lower():
+        return TTS_MERGE_CHARS
+    return 0
+
+
+def _trim_whole(pcm: bytes, sr: int) -> bytes:
+    """整句 PCM 去头尾长静音。只给一次出整句的引擎用，流式 hop 分片禁止调用。"""
+    from tts.pcmtrim import trim_pcm16
+    return trim_pcm16(pcm, int(sr or TTS_SAMPLE_RATE), TTS_TRIM_HEAD_MS, TTS_TRIM_TAIL_MS)
+
+
 def pack_tts_utterances(parts, persona=None, min_chars: Optional[int] = None) -> list:
     """先转口播数字，再按标点切开。尾段单独成项，禁止粘到上一句被 CosyVoice 截掉。"""
     from tts.speaktext import split_speak_chunks, to_spoken_zh
@@ -815,7 +837,7 @@ def _embedding_only_gen(text: str, persona_id: str = ""):
     流式声码器只接受 speed=1.0。
     禁止把 flow prompt 也清空：只靠 192 维向量锁不住音色，句间会像好几个人。
     """
-    from tts.speaktext import to_spoken_zh, split_speak_chunks
+    from tts.speaktext import group_speak_chunks, to_spoken_zh, split_speak_chunks
     pid = persona_id or _voice_persona_id
     pair = _spk_embeddings(persona_id=pid)
     if pair is None:
@@ -847,6 +869,9 @@ def _embedding_only_gen(text: str, persona_id: str = ""):
     if isinstance(normalized, str):
         normalized = normalized.replace("〇", "零")
     pieces = split_speak_chunks(normalized or spoken)
+    if _cosyvoice3_loaded():
+        # 上游已按字数拼好；这里再按逗号拆回去，每段又要重算一次参考音前缀。
+        pieces = group_speak_chunks(pieces, clause_merge_chars())
     if not pieces:
         pieces = [spoken] if spoken else []
 
@@ -1407,8 +1432,18 @@ def _load_cosyvoice_unlocked():
         kind_name = "CosyVoice2-0.5B" if use_cv2 else "Fun-CosyVoice3-0.5B"
         print("📦 加载 %s ..." % kind_name)
         import os as _os
-        _tts_log("[TTS] %s() begin cuda=%s" % (CosyVoiceCls.__name__, torch.cuda.is_available()))
-        cosyvoice_model = CosyVoiceCls(COSYVOICE_MODEL, fp16=True)
+        use_trt = bool(COSYVOICE_LOAD_TRT and torch.cuda.is_available())
+        _tts_log("[TTS] %s() begin cuda=%s trt=%s" % (
+            CosyVoiceCls.__name__, torch.cuda.is_available(), use_trt))
+        if use_trt:
+            try:
+                cosyvoice_model = CosyVoiceCls(COSYVOICE_MODEL, load_trt=True, fp16=True)
+            except Exception as e:
+                _tts_log("[TTS] WARN TensorRT 加载失败，退回 PyTorch Flow: %s: %s" % (
+                    type(e).__name__, e))
+                cosyvoice_model = None
+        if cosyvoice_model is None:
+            cosyvoice_model = CosyVoiceCls(COSYVOICE_MODEL, fp16=True)
         _tts_log("[TTS] %s() done sr=%s" % (CosyVoiceCls.__name__, getattr(cosyvoice_model, "sample_rate", "")))
         _install_token2wav_guard(cosyvoice_model.model)
     except Exception as e:
@@ -1629,8 +1664,12 @@ def synthesize_speech_pcm(text: str, speaker: str = "中文男",
             print(f"⚠️ TTS 无 PCM persona={pid or '-'} '{text[:30]}'")
         return b"", sr
 
-    audio_data = np.concatenate(segs) if len(segs) > 1 else segs[0]
-    pcm_bytes = _float_to_pcm16(audio_data)
+    if _cosyvoice3_loaded():
+        pcm_bytes = b"".join(_trim_whole(_float_to_pcm16(s), sr) for s in segs)
+        audio_data = np.concatenate(segs) if len(segs) > 1 else segs[0]
+    else:
+        audio_data = np.concatenate(segs) if len(segs) > 1 else segs[0]
+        pcm_bytes = _float_to_pcm16(audio_data)
     if not pcm_bytes:
         reason = _energy_fail_reason(audio_data)
         print(f"⚠️ TTS 整句静音/NaN，不下发 persona={pid or '-'} '{text[:30]}' ({reason})")
@@ -1642,6 +1681,65 @@ def synthesize_speech_pcm(text: str, speaker: str = "中文男",
     if audio_cache:
         audio_cache.put(text, speaker, (pcm_bytes, sr), fmt='pcm', persona_id=pid)
     return pcm_bytes, sr
+
+
+def synthesize_batch_pcm(texts, speaker: str = "中文男",
+                         cancel_ev: Optional[threading.Event] = None,
+                         persona=None) -> list:
+    """Qwen3-TTS 多句一批合成，返回与 texts 等长的 [(pcm, sr)]。命中缓存的句子不进 GPU。
+
+    其他引擎没有批量接口，逐句走 synthesize_speech_pcm。
+    """
+    from tts.engine import use_qwen_tts
+    items = list(texts or [])
+    if not use_qwen_tts():
+        out = []
+        for t in items:
+            if cancel_ev is not None and cancel_ev.is_set():
+                out.append((b"", TTS_SAMPLE_RATE))
+                continue
+            out.append(synthesize_speech_pcm(t, speaker, cancel_ev, persona=persona))
+        return out
+    if cosyvoice_model is None:
+        load_cosyvoice()
+    from tts.qwen import qwen_ready, synthesize_batch as _qwen_batch
+    if not qwen_ready():
+        raise RuntimeError(_tts_last_error or "Qwen3-TTS 未加载")
+    p = resolve_tts_persona(persona)
+    pid = p.id if p is not None else ""
+    out = [(b"", tts_output_rate()) for _ in items]
+    miss = []
+    for i, t in enumerate(items):
+        cached = audio_cache.get(t, speaker, fmt='pcm', persona_id=pid) if audio_cache else None
+        if cached and cached[0] and not _pcm_is_silent(cached[0]):
+            out[i] = cached
+        elif (t or "").strip():
+            miss.append(i)
+    if miss:
+        got = _qwen_batch([items[i] for i in miss], p, cancel_ev)
+        for i, (pcm_bytes, sr) in zip(miss, got):
+            out[i] = (pcm_bytes, sr)
+            if audio_cache and pcm_bytes and not _pcm_is_silent(pcm_bytes):
+                audio_cache.put(items[i], speaker, (pcm_bytes, sr), fmt='pcm', persona_id=pid)
+    return out
+
+
+def prefetch_batch(texts, speaker: str = "中文男",
+                   cancel_ev: Optional[threading.Event] = None, persona=None) -> int:
+    """把排队中的几句一次合成进 audio_cache，随后逐句 push_sentence_pcm 直接命中缓存。
+
+    只对 Qwen3-TTS 生效（有批量接口）。返回成功预取的句数，失败不抛，由逐句合成兜底。
+    """
+    from tts.engine import use_qwen_tts
+    items = [t for t in (texts or []) if (t or "").strip()]
+    if len(items) < 2 or not audio_cache or not use_qwen_tts():
+        return 0
+    try:
+        got = synthesize_batch_pcm(items, speaker, cancel_ev, persona=persona)
+    except Exception as e:
+        _tts_log("[TTS] qwen 预取失败，逐句合成兜底: %s: %s" % (type(e).__name__, e), fail=True)
+        return 0
+    return sum(1 for pcm_bytes, _sr in got if pcm_bytes)
 
 async def synthesize_speech_streaming(websocket, safe_send, text: str, speaker: str,
                                       session_id: str, seq: int,
@@ -1750,7 +1848,9 @@ async def synthesize_speech_streaming(websocket, safe_send, text: str, speaker: 
         await emit_subtitle()
         print("🔊 Qwen3-TTS PCM persona=%s '%s' bytes=%s sr=%s"
               % (pid or "-", text[:24], len(pcm_bytes), sr))
-        cancelled = await push_pcm_bytes(pcm_bytes, sr, pace=True)
+        # 不按播放节奏等：等这一句播完才去合成下一句，句间空档就是整句合成耗时。
+        # tts_end 由调用方的 PcmPlayClock 按真实时长延后。
+        cancelled = await push_pcm_bytes(pcm_bytes, sr, pace=False)
         if not sent_pcm:
             msg = "Qwen3-TTS PCM 被静音过滤 persona=%s '%s' bytes=%s" % (
                 pid or "-", text[:24], len(pcm_bytes))
@@ -1763,8 +1863,8 @@ async def synthesize_speech_streaming(websocket, safe_send, text: str, speaker: 
             })
         return seq, cancelled
 
-    # 缓存命中（pcm）。必须按音频时长匀速推，不能瞬间倒完：
-    # Unity 还没进播放态就会先收到 tts_end。参考 robot-ask-ws-改动说明.md。
+    # 缓存命中（pcm）直接推完。Unity 先收到 tts_end 的问题由调用方 PcmPlayClock 兜住
+    # （按已推 PCM 真实时长等到播完才发 tts_end）；这里再匀速等，下一句就要排队干等。
     if audio_cache:
         cached = audio_cache.get(text, speaker, fmt='pcm', persona_id=pid)
         if cached:
@@ -1777,30 +1877,51 @@ async def synthesize_speech_streaming(websocket, safe_send, text: str, speaker: 
             pcm_bytes, sr = cached
             sr = sr or TTS_SAMPLE_RATE
             duration = len(pcm_bytes) / 2.0 / float(sr) if pcm_bytes else 0.0
-            print(f"🔁 TTS 缓存命中 persona={pid or '-'} '{text[:15]}...' | {duration:.2f}s，按播放节奏推流")
+            print(f"🔁 TTS 缓存命中 persona={pid or '-'} '{text[:15]}...' | {duration:.2f}s")
             await emit_subtitle()
-            cancelled = await push_pcm_bytes(pcm_bytes, sr, pace=True)
+            cancelled = await push_pcm_bytes(pcm_bytes, sr, pace=False)
             if not sent_pcm:
                 print(f"⚠️ 缓存全是静音，已跳过 tts_chunk persona={pid or '-'} '{text[:24]}'")
             return seq, cancelled
 
     if _remote_on():
-        from tts.remote import speaker_id_of, synthesize_pcm as _remote_pcm
+        from tts.remote import iter_pcm as _remote_iter, speaker_id_of
         loop = asyncio.get_running_loop()
-        try:
-            pcm_bytes, sr = await loop.run_in_executor(
-                None, lambda: _remote_pcm(text, speaker_id_of(p, speaker), cancel_ev))
-        except Exception as e:
-            print(f"⚠️ 独立 TTS 失败 persona={pid or '-'} '{text[:24]}': {e}")
+        piece_q: asyncio.Queue = asyncio.Queue()
+        spk = speaker_id_of(p, speaker)
+
+        def _pull():
+            # 独立进程每合成完一段就往 HTTP 里写一段，这里收到就转发，不等整句。
+            try:
+                for chunk, rate in _remote_iter(text, spk, cancel_ev):
+                    loop.call_soon_threadsafe(piece_q.put_nowait, (chunk, rate))
+            except Exception as e:
+                loop.call_soon_threadsafe(piece_q.put_nowait, e)
+            finally:
+                loop.call_soon_threadsafe(piece_q.put_nowait, None)
+
+        threading.Thread(target=_pull, daemon=True).start()
+        got = bytearray()
+        sr = TTS_SAMPLE_RATE
+        cancelled = False
+        while True:
+            item = await piece_q.get()
+            if item is None:
+                break
+            if isinstance(item, Exception):
+                print(f"⚠️ 独立 TTS 失败 persona={pid or '-'} '{text[:24]}': {item}")
+                continue
+            if cancelled:
+                continue
+            chunk, sr = item
+            got.extend(chunk)
+            # 不按播放节奏等，tts_end 由调用方 PcmPlayClock 按真实时长延后。
+            cancelled = await push_pcm_bytes(chunk, sr, pace=False)
+        if not got or not sent_pcm:
             await emit_subtitle()
-            return seq, False
-        if not pcm_bytes:
-            await emit_subtitle()
-            return seq, cancel_ev.is_set()
-        await emit_subtitle()
-        # 独立进程一次返回整句 PCM。必须按播放节奏推，否则 Unity 先收到 tts_end。
-        cancelled = await push_pcm_bytes(pcm_bytes, sr, pace=True)
-        if audio_cache and pcm_bytes and not _pcm_is_silent(pcm_bytes):
+            return seq, cancelled or cancel_ev.is_set()
+        pcm_bytes = bytes(got)
+        if not cancelled and audio_cache and not _pcm_is_silent(pcm_bytes):
             audio_cache.put(text, speaker, (pcm_bytes, sr), fmt='pcm', persona_id=pid)
         return seq, cancelled
 
@@ -1808,7 +1929,9 @@ async def synthesize_speech_streaming(websocket, safe_send, text: str, speaker: 
     seg_queue: asyncio.Queue = asyncio.Queue()
     t0 = time.time()
     first_chunk_time = None
-    all_segs = []
+    all_pcm = bytearray()
+    # CosyVoice3 每段是 _yield_tts_once 的整句输出，可以裁头尾；CosyVoice2 是 hop 分片，不能裁。
+    whole_piece = _cosyvoice3_loaded()
 
     def _run_inference():
         gen = None
@@ -1869,7 +1992,9 @@ async def synthesize_speech_streaming(websocket, safe_send, text: str, speaker: 
             reason = _energy_fail_reason(seg, n_bad)
             print(f"⚠️ TTS 空/静音 PCM 段 persona={pid or '-'} '{text[:24]}' ({reason})")
             continue
-        all_segs.append(seg)
+        if whole_piece:
+            pcm_bytes = _trim_whole(pcm_bytes, sr)
+        all_pcm.extend(pcm_bytes)
         peak, rms = _audio_peak_rms(seg)
         shape = tuple(speech.shape) if hasattr(speech, "shape") else ()
         dtype = getattr(speech, "dtype", type(seg))
@@ -1885,11 +2010,10 @@ async def synthesize_speech_streaming(websocket, safe_send, text: str, speaker: 
         if cancelled:
             break
 
-    if sent_pcm and all_segs and not cancelled:
-        audio_data = np.concatenate(all_segs) if len(all_segs) > 1 else all_segs[0]
-        duration = len(audio_data) / sr if getattr(audio_data, "size", 0) else 0.0
+    if sent_pcm and all_pcm and not cancelled:
+        full_pcm = bytes(all_pcm)
+        duration = len(full_pcm) / 2.0 / float(sr or TTS_SAMPLE_RATE)
         rtf = (time.time() - t0) / duration if duration > 0 else 0
-        full_pcm = _float_to_pcm16(audio_data)
         if audio_cache and full_pcm and not _pcm_is_silent(full_pcm):
             audio_cache.put(text, speaker, (full_pcm, sr), fmt='pcm', persona_id=pid)
         print(f"✅ 流式合成: '{text[:15]}...' | {duration:.2f}s | RTF={rtf:.2f}")

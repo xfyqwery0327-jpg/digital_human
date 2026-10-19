@@ -68,9 +68,12 @@ def _load_model(model_dir):
         "device_map": "cuda:0" if use_cuda else "cpu",
         "dtype": torch.bfloat16 if use_cuda else torch.float32,
     }
+    import os
+    # 装了 flash-attn 时可设 QWEN_TTS_ATTN=flash_attention_2，talker 每步更快。
+    attn = (os.environ.get("QWEN_TTS_ATTN") or "sdpa").strip()
     try:
         return Qwen3TTSModel.from_pretrained(
-            str(model_dir), attn_implementation="sdpa", **kwargs)
+            str(model_dir), attn_implementation=attn, **kwargs)
     except TypeError:
         return Qwen3TTSModel.from_pretrained(str(model_dir), **kwargs)
 
@@ -131,6 +134,48 @@ def _prompt_for(model, persona):
     return item
 
 
+def _trim(pcm: bytes, rate: int) -> bytes:
+    from config import TTS_TRIM_HEAD_MS, TTS_TRIM_TAIL_MS
+    from tts.pcmtrim import trim_pcm16
+    return trim_pcm16(pcm, rate, TTS_TRIM_HEAD_MS, TTS_TRIM_TAIL_MS)
+
+
+def _generate(pieces, persona):
+    """一次 generate 合成 pieces 里的全部句子，返回每句的波形列表和采样率。
+
+    talker 每 80ms 一帧，每帧还要再跑 15 步 code predictor，batch=1 时 GPU 大半在等 Python。
+    多句放进同一个 batch，耗时约等于最长那一句，而不是逐句相加。
+    """
+    budget = max(codec_budget(p) for p in pieces)
+    prompt = _prompt_for(_model, persona)
+    with _lock:
+        _reset_talker_cache(_model)
+        try:
+            generated = _model.generate_voice_clone(
+                text=list(pieces) if len(pieces) > 1 else pieces[0],
+                language=["Chinese"] * len(pieces) if len(pieces) > 1 else "Chinese",
+                voice_clone_prompt=prompt,
+                non_streaming_mode=True,
+                max_new_tokens=budget,
+            )
+        finally:
+            _reset_talker_cache(_model)
+    return _unpack_wavs(generated)
+
+
+def _to_pcm(audio, rate: int) -> bytes:
+    pcm = _float_to_pcm16(audio) if audio is not None else b""
+    return _trim(pcm, rate) if pcm else b""
+
+
+def _pcm_peak(pcm: bytes) -> int:
+    if not pcm:
+        return 0
+    import numpy as np
+    samples = np.frombuffer(pcm, dtype="<i2")
+    return int(np.max(np.abs(samples.astype(np.int32)))) if samples.size else 0
+
+
 def _synthesize_piece(piece: str, persona, cancel_ev):
     """一句一算。每句前后清 RoPE，避免上一句的位置偏移把结束符顶飞。"""
     import time
@@ -138,41 +183,70 @@ def _synthesize_piece(piece: str, persona, cancel_ev):
     budget = codec_budget(piece)
     _log_tts("[TTS] qwen synth begin chars=%s budget=%s text=%s" % (len(piece), budget, piece[:40]))
     try:
-        prompt = _prompt_for(_model, persona)
-        with _lock:
-            _reset_talker_cache(_model)
-            try:
-                generated = _model.generate_voice_clone(
-                    text=piece,
-                    language="Chinese",
-                    voice_clone_prompt=prompt,
-                    non_streaming_mode=True,
-                    max_new_tokens=budget,
-                )
-            finally:
-                _reset_talker_cache(_model)
+        wavs, sr = _generate([piece], persona)
     except Exception as e:
         msg = "qwen synth FAIL %s: %s text=%s" % (type(e).__name__, e, piece[:40])
         _log_tts("[TTS] " + msg, fail=True)
         raise RuntimeError(msg) from e
     if cancel_ev is not None and cancel_ev.is_set():
         return b"", _sample_rate
-    wavs, sr = _unpack_wavs(generated)
-    audio = wavs[0] if wavs else None
-    pcm = _float_to_pcm16(audio) if audio is not None else b""
     rate = int(sr or _sample_rate)
-    peak = 0
-    if pcm:
-        import numpy as np
-        samples = np.frombuffer(pcm, dtype="<i2")
-        peak = int(np.max(np.abs(samples.astype(np.int32)))) if samples.size else 0
+    pcm = _to_pcm(wavs[0] if wavs else None, rate)
     _log_tts("[TTS] qwen synth done chars=%s pcm=%s sr=%s peak=%s wall=%.2fs"
-             % (len(piece), len(pcm), rate, peak, time.time() - t0))
+             % (len(piece), len(pcm), rate, _pcm_peak(pcm), time.time() - t0))
     if not pcm:
         msg = "qwen synth empty chars=%s text=%s" % (len(piece), piece[:40])
         _log_tts("[TTS] " + msg, fail=True)
         raise RuntimeError(msg)
     return pcm, rate
+
+
+def synthesize_batch(texts, persona=None, cancel_ev=None, batch_size: int = 0) -> list:
+    """多句并行合成，返回与 texts 等长的 [(pcm_bytes, sample_rate), ...]。
+
+    某句没出声时 pcm 为 b""，由调用方决定是否单句重试。整批失败时退回逐句。
+    """
+    import time
+    from config import QWEN_TTS_BATCH
+    if _model is None:
+        raise RuntimeError(_last_error or "Qwen3-TTS 未加载")
+    items = [(t or "").strip() for t in (texts or [])]
+    out = [(b"", _sample_rate) for _ in items]
+    todo = [i for i, t in enumerate(items) if t]
+    size = max(1, int(batch_size or QWEN_TTS_BATCH))
+    for start in range(0, len(todo), size):
+        if cancel_ev is not None and cancel_ev.is_set():
+            break
+        idxs = todo[start:start + size]
+        pieces = [items[i] for i in idxs]
+        t0 = time.time()
+        _log_tts("[TTS] qwen batch begin n=%s chars=%s budget=%s first=%s"
+                 % (len(pieces), [len(p) for p in pieces],
+                    max(codec_budget(p) for p in pieces), pieces[0][:24]))
+        try:
+            wavs, sr = _generate(pieces, persona)
+        except Exception as e:
+            _log_tts("[TTS] qwen batch FAIL %s: %s n=%s，退回逐句"
+                     % (type(e).__name__, e, len(pieces)), fail=True)
+            for i in idxs:
+                if cancel_ev is not None and cancel_ev.is_set():
+                    break
+                try:
+                    out[i] = _synthesize_piece(items[i], persona, cancel_ev)
+                except Exception:
+                    out[i] = (b"", _sample_rate)
+            continue
+        rate = int(sr or _sample_rate)
+        audio_sec = 0.0
+        for k, i in enumerate(idxs):
+            pcm = _to_pcm(wavs[k] if k < len(wavs) else None, rate)
+            out[i] = (pcm, rate)
+            audio_sec += len(pcm) / 2.0 / float(rate)
+        wall = time.time() - t0
+        _log_tts("[TTS] qwen batch done n=%s audio=%.2fs wall=%.2fs rtf=%.2f empty=%s"
+                 % (len(pieces), audio_sec, wall, wall / audio_sec if audio_sec > 0 else 0.0,
+                    sum(1 for i in idxs if not out[i][0])))
+    return out
 
 
 def synthesize_pcm(text: str, persona=None, cancel_ev=None):
