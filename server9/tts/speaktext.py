@@ -156,3 +156,25 @@ def split_speak_chunks(text: str, max_chars: int = 40) -> list:
     if buf:
         out.append(buf)
     return out
+
+
+def group_speak_chunks(chunks, max_chars: int = 40) -> list:
+    """把已按标点切好的小句顺序拼成不超过 max_chars 的合成单元。
+
+    给 CosyVoice3 / Qwen3-TTS 用：它们一次整句出声，调用次数越多句间空档越长。
+    单个小句本身超长时原样保留，不在句中硬切。max_chars <= 0 时不拼。
+    """
+    items = [c.strip() for c in (chunks or []) if c and c.strip()]
+    if max_chars <= 0:
+        return items
+    out = []
+    buf = ""
+    for c in items:
+        if buf and len(buf) + len(c) > max_chars:
+            out.append(buf)
+            buf = c
+        else:
+            buf = f"{buf}{c}"
+    if buf:
+        out.append(buf)
+    return out

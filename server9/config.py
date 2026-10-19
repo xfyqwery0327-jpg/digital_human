@@ -157,6 +157,26 @@ TTS_MAX_WORKERS = 1
 ENABLE_AUDIO_CACHE = True
 AUDIO_CACHE_SIZE = 100
 
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
+
+
+# CosyVoice3 / Qwen3-TTS 一次只能整句出声，每次调用都要重算参考音前缀。
+# 按逗号一句一调，固定开销会把句间空档拉长。这里把相邻小句拼到这个字数再合成。
+# 0 = 回到逐小句合成（CosyVoice2 流式不受影响，始终逐小句）。
+TTS_MERGE_CHARS = max(0, _env_int("TTS_MERGE_CHARS", 40))
+# 整句合成的头尾静音只留这么多毫秒，句与句之间不再叠两段留白。0 = 不裁。
+TTS_TRIM_HEAD_MS = max(0, _env_int("TTS_TRIM_HEAD_MS", 40))
+TTS_TRIM_TAIL_MS = max(0, _env_int("TTS_TRIM_TAIL_MS", 160))
+# Qwen3-TTS 一次 generate 并行合成的句数。批内耗时≈最长那一句，4070 上 8 句以内显存足够。
+QWEN_TTS_BATCH = max(1, _env_int("QWEN_TTS_BATCH", 8))
+# 1 = CosyVoice 的 Flow 走 TensorRT（需装 tensorrt，首次会编译 plan 几分钟）。失败自动退回 PyTorch。
+COSYVOICE_LOAD_TRT = os.environ.get("COSYVOICE_LOAD_TRT", "0").strip().lower() in {"1", "true", "yes"}
+
 # 每片 PCM 字节数。Unity 会把整段 JSON（含 base64）打进日志，单片过大或全 0
 # 会变成超长 AAAA... 撑爆 LogBlueprintUserMessages。
 TTS_CHUNK_SIZE = 4096
