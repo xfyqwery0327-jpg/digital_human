@@ -3,7 +3,8 @@
 
 音色沿用讲解进程里已经听顺的跨语种路径：LLM 只吃系统前缀，不把参考句再喂进去
 （否则会把参考文本念出来）；Flow 用参考音的 token 和频谱把音色锁住。
-每段合成使用 stream=False，段末 finish_sentence()。不要在多轮对话里复用 KV。
+每段合成使用 stream=False，段末 reset_kv_cache()，空闲后再 finish_sentence() 还显存。
+不要在多轮对话里复用 KV。
 """
 from __future__ import annotations
 
@@ -201,6 +202,7 @@ class TTSEngine:
         self.busy = False
         self.last_request_end = time.time()
         self.ready = False
+        self._dirty = False
 
     def load(self) -> None:
         import torch
@@ -227,8 +229,17 @@ class TTSEngine:
         # 官方 fp16=True 只打开 autocast，不保证权重以半精度存放。
         # vLLM 会再占一块显存，和旁边的机器人 LLM 冲突，这里强制关闭。
         from cosyvoice.cli.cosyvoice import CosyVoice3
-        log(f"[TTS] CosyVoice3() fp16 autocast model={model_dir}")
-        self.cv = CosyVoice3(model_dir, load_trt=False, load_vllm=False, fp16=True)
+        use_trt = (os.environ.get("COSYVOICE_LOAD_TRT", "0").strip().lower() in {"1", "true", "yes"})
+        log(f"[TTS] CosyVoice3() fp16 autocast trt={use_trt} model={model_dir}")
+        self.cv = None
+        if use_trt:
+            try:
+                self.cv = CosyVoice3(model_dir, load_trt=True, load_vllm=False, fp16=True)
+            except Exception as exc:
+                log(f"[TTS] TensorRT 加载失败，退回 PyTorch Flow: {type(exc).__name__}: {exc}")
+                self.cv = None
+        if self.cv is None:
+            self.cv = CosyVoice3(model_dir, load_trt=False, load_vllm=False, fp16=True)
         self.sample_rate = int(getattr(self.cv, "sample_rate", 24000) or 24000)
 
         core = self.cv.model
@@ -243,7 +254,9 @@ class TTSEngine:
             _cast_floating(core.hift, torch.float16)
             log("[TTS] llm/flow/hift 权重已转为 fp16 存储")
 
-        use_int8 = (os.environ.get("TTS_INT8", "1").strip().lower() not in {"0", "false", "no"})
+        # INT8 只省约 0.5GB，但每个 Linear 每步都要把 int8 权重整张反量化成 fp16 再乘，
+        # Qwen2 逐 token 解码会明显变慢，句间空档跟着变长。显存确实不够时再设 TTS_INT8=1。
+        use_int8 = (os.environ.get("TTS_INT8", "0").strip().lower() in {"1", "true", "yes"})
         scope = (os.environ.get("TTS_INT8_SCOPE") or "llm").strip().lower()
         if use_int8:
             body = getattr(getattr(core.llm, "llm", None), "model", None)
@@ -474,7 +487,8 @@ class TTSEngine:
             raise RuntimeError("分句失败，出现超长片段，已拒绝送入模型")
         lens = [len(c) for c in chunks]
         log(f"[TTS] 分片 n={len(chunks)} max={max_chars} lens={lens} speaker={speaker_id} preview={chunks[0][:20]!r}")
-        log(format_snapshot("before", snapshot()))
+        # 这里只看 torch 计数。nvidia-smi 每次要起子进程，放在合成前后就是每句白等几百毫秒。
+        log(format_snapshot("before", snapshot(smi=False)))
         import torch
         model = self.cv.model
         with self._lock:
@@ -492,24 +506,65 @@ class TTSEngine:
                     finally:
                         _close_gen(gen)
                         # 机器人单句生成：不保留这条句子的 KV、flow、hift。
+                        # gc / empty_cache 不在这里做：下一段要重新向驱动要显存，
+                        # Windows 上每次都是几十到上百毫秒的空档。空闲后由 release_if_idle 收尾。
                         model.reset_kv_cache()
-                        import gc
-                        gc.collect()
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
                     elapsed = time.time() - t0
-                    audio_sec = (len(pcm) / 2.0 / float(self.sample_rate)) if pcm else 0.0
+                    out = _trim_pcm(bytes(pcm), self.sample_rate) if pcm else b""
+                    audio_sec = (len(out) / 2.0 / float(self.sample_rate)) if out else 0.0
                     log(
                         f"[TTS] chunk={idx}/{len(chunks)} chars={len(piece)} "
-                        f"elapsed={elapsed:.2f}s audio={audio_sec:.2f}s text={piece[:24]!r}"
+                        f"elapsed={elapsed:.2f}s audio={audio_sec:.2f}s "
+                        f"rtf={(elapsed / audio_sec) if audio_sec > 0 else 0.0:.2f} text={piece[:24]!r}"
                     )
-                    log(format_snapshot("after_chunk", snapshot()))
-                    if pcm:
-                        yield bytes(pcm)
+                    if out:
+                        yield out
             finally:
+                self._dirty = True
                 self.busy = False
                 self.last_request_end = time.time()
-                log(format_snapshot("after", snapshot()))
+                log(format_snapshot("after", snapshot(smi=False)))
+
+    def release_if_idle(self, min_idle: float = 1.5) -> bool:
+        """空闲够久才 gc + empty_cache，把显存还给旁边的机器人 LLM。正在合成时绝不动。"""
+        if not self._dirty or self.busy or self.cv is None:
+            return False
+        if time.time() - float(self.last_request_end or 0) < min_idle:
+            return False
+        if not self._lock.acquire(blocking=False):
+            return False
+        try:
+            if self.busy:
+                return False
+            finish_sentence(self.cv.model)
+            self._dirty = False
+            return True
+        finally:
+            self._lock.release()
+
+
+def _trim_pcm(pcm: bytes, sample_rate: int) -> bytes:
+    """整段头尾静音只留一点，逐段拼起来时逗号处不再叠出将近一秒的空档。"""
+    fn = getattr(_trim_pcm, "fn", None)
+    if fn is None:
+        fn = lambda data, sr, head, tail: data  # noqa: E731
+        path = project_root() / "server9" / "tts" / "pcmtrim.py"
+        if path.is_file():
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("dh_pcmtrim", path)
+            if spec and spec.loader:
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                fn = mod.trim_pcm16
+        _trim_pcm.fn = fn
+
+    def _ms(name: str, default: int) -> int:
+        try:
+            return max(0, int(os.environ.get(name, "").strip() or default))
+        except ValueError:
+            return default
+
+    return fn(pcm, int(sample_rate), _ms("TTS_TRIM_HEAD_MS", 40), _ms("TTS_TRIM_TAIL_MS", 160))
 
 
 def _speech_to_pcm(output) -> bytes:

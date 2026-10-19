@@ -48,7 +48,7 @@ def _child_env() -> dict:
     env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     env.setdefault("TTS_PORT", "8810")
     env.setdefault("TTS_DTYPE", "fp16")
-    env.setdefault("TTS_INT8", "1")
+    env.setdefault("TTS_INT8", "0")
     return env
 
 

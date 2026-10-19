@@ -162,10 +162,15 @@ def torch_allocated_mb() -> int:
         return -1
 
 
-def snapshot(pid: int = None) -> dict:
+def snapshot(pid: int = None, smi: bool = True) -> dict:
+    """smi=False 时只读 torch 计数，不起 nvidia-smi 子进程，合成路径上用这个。"""
     pid = os.getpid() if pid is None else int(pid)
-    gpu = query_gpu()
-    proc = query_process_mb(pid)
+    if smi:
+        gpu = query_gpu()
+        proc = query_process_mb(pid)
+    else:
+        gpu = {"gpu_used_mb": -1, "gpu_total_mb": -1, "gpu_free_mb": -1}
+        proc = -1
     reserved = torch_reserved_mb()
     allocated = torch_allocated_mb()
     # 阈值看本进程。nvidia-smi 有采样延迟，取它和 torch reserved 里更大的那个。

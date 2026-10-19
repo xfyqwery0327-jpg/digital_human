@@ -81,6 +81,10 @@ def test_modules_import():
     from pathlib import Path
     src = Path(__file__).resolve().parents[1].joinpath("tts_cosy3", "engine.py").read_text(encoding="utf-8")
     assert "model.reset_kv_cache()" in src
-    assert "gc.collect()" in src
-    assert "torch.cuda.empty_cache()" in src
     assert "stream=False" in src
+    assert "def release_if_idle" in src
+    assert "finish_sentence(self.cv.model)" in src
+    loop = src.split("for idx, piece in enumerate(chunks")[1].split("def release_if_idle")[0]
+    assert "gc.collect()" not in loop
+    assert "torch.cuda.empty_cache()" not in loop
+    assert "snapshot()" not in loop

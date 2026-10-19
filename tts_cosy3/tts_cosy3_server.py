@@ -44,6 +44,10 @@ _STOP = threading.Event()
 def _state_loop() -> None:
     """把忙闲和显存写给监督进程。空闲且被要求重启时退出，不打断正在说的那一句。"""
     while not _STOP.is_set():
+        try:
+            ENGINE.release_if_idle()
+        except Exception as exc:
+            log(f"[TTS] 空闲释放显存失败: {type(exc).__name__}: {exc}")
         snap = snapshot()
         write_state({
             "pid": os.getpid(),
@@ -105,7 +109,8 @@ def create_app():
         clear_restart_request()
         log(
             f"[TTS] 启动 pid={os.getpid()} dtype={os.environ.get('TTS_DTYPE', 'fp16')} "
-            f"int8={os.environ.get('TTS_INT8', '1')} limit={vram_limit_mb()}MiB"
+            f"int8={os.environ.get('TTS_INT8', '0')} trt={os.environ.get('COSYVOICE_LOAD_TRT', '0')} "
+            f"limit={vram_limit_mb()}MiB"
         )
         try:
             ENGINE.load()
