@@ -29,6 +29,13 @@ from rag.scope import (
     clamp_hall_answer, answer_leaves_exhibition, script_leaves_hall,
     iter_hall_history, refuse_text,
 )
+from rag.visit import visit_hint, guard_hall_clock
+from rag.dialogue import note_realtime, realtime_reply, rule_intent, RealtimeMemory
+from services.local_feed import feed_bundle
+from services.screen_hooks import (
+    is_ticket_booking, booking_reply, ticket_form_event, request_ticket_form,
+    headline_event, request_headline_image,
+)
 from robot.hub import robot_hub
 from robot.logutil import dumps, get_logger
 from robot.scripted import match_fixed_script, normalize_ask_mode, scripted_turn
@@ -108,6 +115,7 @@ def _robot_knowledge_turn_locked(question: str, session: SessionState, top_k: in
         f"【参考资料】\n{ref}\n\n【问题】{question}\n\n"
         f"{works_answer_hint(question, persona)}"
         "只根据参考资料讲这场展，不要提及其他展览。\n"
+        f"{visit_hint(question, persona)}"
         f"{length_rule}"
         "/no_think"
     )
@@ -127,7 +135,7 @@ def _robot_knowledge_turn_locked(question: str, session: SessionState, top_k: in
         if answer_leaves_exhibition(cleaned, persona):
             log.info("生成稿越出本届展，改口拒答 query=%s", question[:80])
             return refuse_payload("answer_leak", persona)
-        text = clamp_hall_answer(cleaned, persona)
+        text = guard_hall_clock(question, clamp_hall_answer(cleaned, persona), persona)
         if reply_chars:
             text = fit_spoken_chars(text, lo, hi)
             n = spoken_len(text)
@@ -147,7 +155,10 @@ def _robot_knowledge_turn_locked(question: str, session: SessionState, top_k: in
                     ], max_tokens=max_tokens)
                     cleaned2 = clean_full_answer(raw2)
                     if cleaned2 and not answer_leaves_exhibition(cleaned2, persona):
-                        text = fit_spoken_chars(clamp_hall_answer(cleaned2, persona), lo, hi)
+                        text = fit_spoken_chars(
+                            guard_hall_clock(
+                                question, clamp_hall_answer(cleaned2, persona), persona),
+                            lo, hi)
                     else:
                         log.info("加长稿不可用，保留第一次口播 chars=%s", n)
                 except Exception as e:
@@ -158,7 +169,10 @@ def _robot_knowledge_turn_locked(question: str, session: SessionState, top_k: in
     except Exception as e:
         log.exception("LLM 失败 query=%s err=%s", question[:80], e)
         raw = contexts[0] if contexts else ""
-        text = clamp_hall_answer(clean_full_answer(raw), persona) if raw else ""
+        text = guard_hall_clock(
+            question,
+            clamp_hall_answer(clean_full_answer(raw), persona) if raw else "",
+            persona)
         if reply_chars:
             text = fit_spoken_chars(text, lo, hi)
         else:
@@ -269,6 +283,44 @@ async def _robot_run_turn(request_id: str, query: str, speaker: str,
             round_no = await robot_hub.bump_round()
             if session:
                 session.add_turn(query, speak_text, [], intent="chitchat")
+                persistence.save_session(session)
+        elif is_ticket_booking(query):
+            speak_text = booking_reply()
+            log.info("ask 门票预约，打开填写界面 persona=%s query=%s", persona_id, query[:80])
+            from ws.hub import tts_fanout
+            await tts_fanout.send(
+                ticket_form_event(query, session_id or "", persona_id),
+                persona_id=persona_id)
+            loop.run_in_executor(
+                None, lambda: request_ticket_form(query, persona_id, session_id or ""))
+            round_no = await robot_hub.bump_round()
+            if session:
+                session.add_turn(query, speak_text, [], intent="ticket_service")
+                persistence.save_session(session)
+        elif rule_intent(query) in ("weather", "news"):
+            kind = rule_intent(query)
+            persona = active()
+            state = session if session is not None else RealtimeMemory()
+            note_realtime(state)
+            bundle = {}
+            if state.realtime_streak <= 1:
+                bundle = await loop.run_in_executor(None, lambda k=kind: feed_bundle(k))
+            if kind == "news" and (bundle or {}).get("image_url"):
+                from ws.hub import tts_fanout
+                await tts_fanout.send(headline_event(
+                    bundle.get("title") or "", bundle.get("image_url") or "",
+                    bundle.get("link") or "", session_id or "", persona_id),
+                    persona_id=persona_id)
+                loop.run_in_executor(
+                    None,
+                    lambda b=bundle: request_headline_image(
+                        b.get("title") or "", b.get("image_url") or "",
+                        b.get("link") or "", persona_id, session_id or ""))
+            speak_text = realtime_reply(state, persona, (bundle or {}).get("text") or "")
+            log.info("ask 实时问题第%s轮 persona=%s kind=%s", state.realtime_streak, persona_id, kind)
+            round_no = await robot_hub.bump_round()
+            if session:
+                session.add_turn(query, speak_text, [], intent=kind)
                 persistence.save_session(session)
         elif is_greeting(query):
             speak_text = pick_hello()

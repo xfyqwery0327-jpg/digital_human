@@ -37,6 +37,10 @@ class PersonaConfig:
     intent_examples: Dict[str, List[str]] = field(default_factory=dict)
     warmup_text: str = "测试。"
     opening_strip_patterns: List[str] = field(default_factory=list)
+    realtime_first: str = ""
+    realtime_again: str = ""
+    realtime_hooks: List[str] = field(default_factory=list)
+    exhibit_aliases: Dict[str, str] = field(default_factory=dict)
 
     @property
     def index_path(self) -> Path:

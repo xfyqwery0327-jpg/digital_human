@@ -234,7 +234,13 @@ ENABLE_INTENT = True
 INTENT_CONFIDENCE_THRESHOLD = {
     "command": 0.4,
     "chitchat": 0.5,
-    "knowledge": 0.0
+    "knowledge": 0.0,
+    "ticket_service": 1.0,
+    "weather": 0.45,
+    "news": 0.45,
+    "exhibit": 0.0,
+    "person": 0.0,
+    "visit": 0.0,
 }
 
 # 机器人互动（可用环境变量覆盖，便于 Windows 现场改 IP 而不改代码）

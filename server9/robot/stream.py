@@ -27,6 +27,45 @@ from robot.logutil import get_logger
 from rag.scope import clamp_hall_answer, hall_safe_sentence, refuse_text
 
 log = get_logger("monet.robot.stream", "robot-api.log")
+_HOOK_MEM = {}
+
+
+def _screen_hooks(question: str, reply: str, persona, leaked: bool) -> dict:
+    """屏幕按钮。不写进机器人 HTTP 正文，也不送去合成。"""
+    empty = {"intent": "knowledge", "lang": "zh", "hook_suggest": [], "exhibit_names": []}
+    if leaked or persona is None:
+        return empty
+    from rag.dialogue import (
+        HALL_INTENTS, RealtimeMemory, exhibit_names, rule_intent, suggest_hooks,
+        titles_from_items,
+    )
+    from rag import index as rag
+    kind = rule_intent(question) or "knowledge"
+    if kind not in ("weather", "news"):
+        try:
+            from rag.intent import intent_classifier
+            intent, score, _conf = intent_classifier.classify(question or "")
+            if intent in HALL_INTENTS and intent_classifier.should_route_to(intent, score):
+                kind = intent
+            elif intent == "chitchat" and intent_classifier.should_route_to(intent, score):
+                kind = intent
+        except Exception:
+            kind = "knowledge"
+    pid = getattr(persona, "id", "") or ""
+    mem = _HOOK_MEM.get(pid)
+    if mem is None:
+        mem = RealtimeMemory()
+        _HOOK_MEM[pid] = mem
+    names = exhibit_names(
+        reply or "",
+        titles_from_items(rag.active_items(persona)),
+        getattr(persona, "exhibit_aliases", None) or {})
+    return {
+        "intent": kind,
+        "lang": "zh",
+        "hook_suggest": suggest_hooks(kind, mem, persona, names),
+        "exhibit_names": names,
+    }
 
 
 def load_wav_pcm16(path) -> tuple:
@@ -272,6 +311,24 @@ async def push_robot_turn_to_ws(speak_text: str, speaker: str,
     await fanout({"type": "llm_answer", "text": speak_text})
     log.info("已推 llm_answer session=%s robot=%s persona=%s chars=%s",
              session_id, rid, pid, len(speak_text or ""))
+    try:
+        from rag.dialogue import exhibit_names, titles_from_items
+        from rag import index as rag
+        from services.screen_hooks import artworks_event, notify_artworks
+        artwork_names = exhibit_names(
+            speak_text,
+            titles_from_items(rag.active_items(persona_obj)),
+            getattr(persona_obj, "exhibit_aliases", None) or {})
+        if artwork_names:
+            await fanout(artworks_event(artwork_names, session_id, pid))
+            log.info("已推 artworks session=%s persona=%s names=%s",
+                     session_id, pid, "、".join(artwork_names))
+            asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda names=artwork_names, reply=speak_text: notify_artworks(
+                    names, reply, pid, session_id))
+    except Exception as e:
+        log.exception("画作截取失败 session=%s err=%s", session_id, e)
     if last_pushed <= 0:
         log.warning("tts_start 未送达任何 /ws/%s/tts 客户端，前端不会播报 session=%s robot=%s persona=%s",
                     pid, session_id, rid, pid)
@@ -442,6 +499,7 @@ async def push_robot_turn_to_ws(speak_text: str, speaker: str,
         "engine": engine,
         "sample_rate": sr,
     }
+    end.update(_screen_hooks(asr_text, speak_text, persona_obj, leaked))
     if seq <= 0:
         end["audio"] = False
         if not skip_reason:
