@@ -1,0 +1,46 @@
+CosyVoice3 独立 TTS（4070 12GB，与机器人 LLM 共存）
+================================================
+
+1. 启动顺序
+   先双击 tts_cosy3\start_tts.bat
+   日志出现「健康检查通过」后，再启动讲解进程。
+   讲解进程不要再加载 CosyVoice。启动讲解前设置：
+     set TTS_BACKEND=http
+     set TTS_BASE_URL=http://127.0.0.1:8810
+
+2. 进程
+   supervisor.py  不占 GPU，负责空闲时重启
+   tts_cosy3_server.py  唯一加载 Fun-CosyVoice3-0.5B 的进程
+   机器人 LLM 用 HTTP 调用，禁止 import cosyvoice
+
+3. 显存
+   默认全 FP16 存储，Flow/HiFT 保持 FP16 以保住音色。
+   TTS_INT8=1 可把 Qwen2 主干压成 INT8，只省约 0.5GB，但每步都要反量化，合成变慢、句间空档变长。
+   禁止 CPU offload，禁止 vLLM。
+   段与段之间只清 KV，不做 gc / empty_cache；空闲 1.5 秒后再统一把显存还给驱动。
+   TTS 进程超过 TTS_VRAM_LIMIT_MB（默认 4096）且空闲超过 TTS_IDLE_SEC（默认 10 秒）才重启。
+   重启要重新加载模型，大约 1～2 分钟。阈值设太低，观众会听到长时间无声。
+
+   提速可选：COSYVOICE_LOAD_TRT=1 让 Flow 走 TensorRT（需 pip install tensorrt，
+   首次启动编译 plan 要几分钟），加载失败自动退回 PyTorch。
+
+4. 看显存
+   nvidia-smi
+   nvidia-smi --query-gpu=memory.used,memory.free --format=csv -l 2
+   nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv -l 2
+   或浏览器打开 http://127.0.0.1:8810/v1/vram
+   每句推理前后会在 logs\tts-cosy3.log 打 [VRAM] 行（只含 torch 计数，不调 nvidia-smi，免得拖慢合成）。
+   每段还会打 elapsed / audio / rtf。rtf 持续大于 1 就说明 GPU 跟不上，句间一定有空档。
+
+5. 依赖
+   用已经能跑 CosyVoice 的解释器。另外需要：
+     pip install fastapi uvicorn python-multipart requests
+   若讲解用的 python 没有这些包，给 TTS 单独指定：
+     set PYTHON=C:\path\to\python.exe
+
+6. 代码分界
+   tts_cosy3_server.py  启动入口和 HTTP
+   engine.py            加载、分句合成、句末清 KV
+   vram.py              nvidia-smi、reset_kv_cache、empty_cache
+   split_text.py        30～40 字分句
+   supervisor.py        空闲重启子进程

@@ -1,0 +1,12 @@
+# 展项服务器 conda 环境 robot 的追加包。
+# 不要并进根目录 requirements.txt。那个文件是 Python 3.14 轻量环境，
+# onnxruntime-gpu 固定 1.29.0，和这里不是同一个环境。
+#
+# 不能一条 pip install -r 装完。qwen-tts 会把 onnxruntime 升上去，CosyVoice 会坏。
+# 必须先装 qwen-tts，再只把 onnxruntime-gpu 强制换回 1.23.2，且不要动 torch。
+#
+#   deploy\install-robot-deps.bat
+#   powershell -ExecutionPolicy Bypass -File deploy\install-robot-deps.ps1
+
+qwen-tts
+onnxruntime-gpu==1.23.2

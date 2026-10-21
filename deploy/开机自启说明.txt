@@ -1,0 +1,323 @@
+﻿数字讲解员 现场开机自启说明
+================================
+适用机器：Windows 展项服务器（账号 BroadMesse，项目 C:\digital_human）
+编写日期：2026-09-20
+修订：2026-10-19 补上 robot 环境安装；语音可在 CosyVoice 与 Qwen3-TTS 之间改用
+本文给运维/交接人员看。不要在 server9 目录里直接 python app.py。
+
+
+一、开机后会自动起来的东西
+------------------------
+登录 BroadMesse 后，Windows 计划任务会先后拉起两条服务（都是隐藏窗口，不要用旧 bat 再开一份）。
+
+序号  任务名              延迟    端口     作用
+1     DigitalHumanLLM     约20秒  8080     llama.cpp 讲解改写（Qwen3-4B 或 Qwen3-8B，只开其中一个）
+2     DigitalHuman        约40秒  8848     讲解员本体（检索 + 语音 + WebSocket）
+
+触发方式：用户登录时（AtLogOn，账号 BroadMesse，最高权限）。
+不是开机未登录就启动。展项电脑需要自动登录 BroadMesse。
+
+两条任务彼此独立。停掉讲解员不会停 llama；停掉 llama 后讲解员仍能播检索原文，但没有人设改写。
+
+GPU：同一张 RTX 4070。同一时刻只允许一轮讲解（莫奈/妇好不能同时 ask，后到的会 409 turn_in_progress）。
+
+上次怎么配的，记在 deploy\last-start.txt：
+
+  llm=4 或 8
+  tts=cosyvoice 或 qwen3
+  cosyvoice=2 或 3
+
+还没用 switch.bat 启动过时，默认是 Qwen3-8B + CosyVoice3。
+
+
+二、第一次在这台 Windows 服务器上部署
+----------------------------------
+项目放在 C:\digital_human。CosyVoice 代码和权重留在 C:\ro\CosyVoice，不要拷进项目。
+
+1) 目录先就位
+
+  C:\digital_human\server9\          运行代码
+  C:\digital_human\index\            FAISS 知识库
+  C:\digital_human\voice\            各人设参考音
+  C:\digital_human\models\           讲解 GGUF、Qwen3-TTS、gte-base-zh
+  C:\ro\CosyVoice\pretrained_models\CosyVoice2-0.5B
+  C:\ro\CosyVoice\pretrained_models\Fun-CosyVoice3-0.5B
+
+  讲解模型（相对项目根目录，不写盘符）：
+    models\Qwen3-4B-Instruct-2507-Q4_K_M.gguf
+    models\Qwen3-8B-Q4_K_M.gguf
+  语音克隆：
+    models\Qwen3-TTS-12Hz-0.6B-Base
+  检索向量：
+    models\gte-base-zh
+
+2) conda 环境 robot
+
+  讲解员和 llama 都用这个环境，不要用系统 Python，也不要装根目录 requirements.txt。
+  根目录 requirements.txt 是另一台机器的 Python 3.14 轻量环境，onnxruntime-gpu 写的是 1.29.0。
+
+  已有环境时跳过创建。没有时：
+
+    conda create -n robot python=3.10 pip -y
+    conda activate robot
+
+  CosyVoice、torch、faiss、sentence-transformers 按现场原有方式装进 robot。
+  本文只追加后来才需要的两个包。
+
+3) 追加 qwen-tts，并把 onnxruntime 换回来
+
+  在项目根目录：
+
+    deploy\install-robot-deps.bat
+
+  脚本做两步，顺序不能反：
+
+    pip install qwen-tts
+    pip install --force-reinstall --no-deps onnxruntime-gpu==1.23.2
+
+  第一步会把 onnxruntime 升到别的版本，CosyVoice 会坏。
+  第二步只换回 1.23.2，--no-deps 是为了不动 torch。
+  包清单在 deploy\requirements-robot.txt。不要对这个文件直接 pip install -r。
+
+  成功时窗口会打出 onnxruntime 1.23.2。装完执行 switch.bat restart，只重启 8848。
+
+4) 注册开机任务（管理员 PowerShell，只需一次）
+
+  powershell -ExecutionPolicy Bypass -File C:\digital_human\deploy\install-llm-autostart.ps1
+  powershell -ExecutionPolicy Bypass -File C:\digital_human\deploy\install-autostart.ps1
+
+  Get-ScheduledTask -TaskName DigitalHuman, DigitalHumanLLM | Format-Table TaskName, State
+
+  卸载：
+
+  powershell -ExecutionPolicy Bypass -File C:\digital_human\deploy\uninstall-llm-autostart.ps1
+  powershell -ExecutionPolicy Bypass -File C:\digital_human\deploy\uninstall-autostart.ps1
+
+
+三、用什么方式启动
+----------------
+都是：任务计划程序 -> 运行 powershell.exe -File 某个脚本。
+脚本里用 conda 环境 robot 的 python.exe 前台阻塞运行（计划任务才能保持子进程不被杀掉）。
+8080 / 8848 已经有人在听时，对应脚本会写 skip 然后退出，避免重复启动。
+
+1) llama.cpp（任务 DigitalHumanLLM）
+   脚本：C:\digital_human\deploy\start-llm.ps1
+   工作目录：C:\digital_human
+   Python：C:\Users\BroadMesse\miniconda3\envs\robot\python.exe
+   等价命令（隐藏窗口，模型文件由上次 switch.bat 决定）：
+
+     python -m llama_cpp.server --model "models\Qwen3-8B-Q4_K_M.gguf" --n_gpu_layers -1 --n_ctx 2048 --host 127.0.0.1 --port 8080 --chat_format chatml
+
+   工作目录是项目根目录，所以模型用相对路径 models\文件名。
+   4B 时把文件名换成 Qwen3-4B-Instruct-2507-Q4_K_M.gguf。
+   项目放在 C:\、D:\ 或 E:\ 都可以，不再使用 C:\ro\models。
+   只监听本机 127.0.0.1:8080，Unity 不要直连这个端口。
+
+2) 讲解员（任务 DigitalHuman）
+   脚本：C:\digital_human\deploy\start-server.ps1
+   工作目录：C:\digital_human
+   Python：同上 robot 环境
+   等价命令：
+
+     set PYTHONPATH=C:\digital_human\server9
+     set COSYVOICE_PATH=C:\ro\CosyVoice
+     set COSYVOICE_MODEL=C:\ro\CosyVoice\pretrained_models\Fun-CosyVoice3-0.5B
+     python -m uvicorn app:app --host 0.0.0.0 --port 8848 --log-level info
+
+   上面的模型路径只是当前默认（3）。开机实际读 deploy\last-start.txt。
+   tts=cosyvoice 时，cosyvoice=2 用 CosyVoice2-0.5B，3 用 Fun-CosyVoice3-0.5B。
+   tts=qwen3 时加载 models\Qwen3-TTS-12Hz-0.6B-Base，参考音仍用人设的 prompt wav。
+   不要在系统环境变量里写死 COSYVOICE_MODEL，否则切换文件不生效。
+   参考音会自动裁到 8 秒以内（原文件不动，生成 *_le8s.wav）。
+
+
+四、怎么切换
+------------
+在项目根目录用 switch.bat。不要两个讲解模型一起开，8080 只能有一个。
+
+  switch.bat
+  1 开启  按上次配置启动 8080 和 8848
+  2 关闭
+  3 状态
+  4 改用 Qwen3-4B，并启动讲解模型
+  5 改用 Qwen3-8B，并启动讲解模型
+  6 改用 CosyVoice3（只改配置）
+  7 改用 CosyVoice2（只改配置）
+  8 改用 Qwen3-TTS（只改配置）
+  9 重启讲解员（只动 8848，按上面记下的语音重新加载）
+
+命令行同样：
+
+  switch.bat on | off | status | restart
+  switch.bat llm 4 | llm 8
+  switch.bat cv 3 | cv 2
+  switch.bat tts qwen | tts cv
+
+数字 2 是关闭，不是 CosyVoice2。
+改用语音只写 last-start.txt，不会杀掉正在跑的 8848。要换上新语音，再执行 switch.bat restart，或等下次登录。
+换讲解模型会重启 8080。关闭只停当前进程，不取消开机任务。下次登录仍按 last-start.txt 拉起。
+Qwen3-TTS 是 Base 声音克隆，沿用 voice 里各人设的参考音。robot 环境必须已经跑过第二节的安装脚本。
+
+旧的语音切换脚本仍可用，也会改 last-start.txt。正在跑的 8848 不会自己换模型。
+
+  powershell -ExecutionPolicy Bypass -File C:\digital_human\deploy\switch-cosyvoice.ps1
+  powershell -ExecutionPolicy Bypass -File C:\digital_human\deploy\switch-cosyvoice.ps1 3
+  powershell -ExecutionPolicy Bypass -File C:\digital_human\deploy\switch-cosyvoice.ps1 3 -Restart
+
+  计划任务是「已在运行就忽略新的启动」。若 8848 已停、任务仍显示 Running，
+  直接 Start-ScheduledTask 不会写新日志。带 -Restart 的脚本会先 Stop-ScheduledTask。
+  成功时 autostart.log 会打出新的 model= 行。
+
+
+五、怎么判断已经正常
+--------------------
+管理员 PowerShell：
+
+  Invoke-RestMethod http://127.0.0.1:8080/v1/models
+  Invoke-RestMethod http://127.0.0.1:8848/health | Select-Object status, tts, tts_engine, tts_error, chunks, llm
+
+期望：
+  8080 能列出当前选中的 gguf（Qwen3-4B 或 Qwen3-8B）
+  status=healthy
+  tts=True
+  llm=True
+  tts_error 为空
+  chunks 为两千左右（0 表示索引没进内存，检索会拒答）
+  用 Qwen3-TTS 时 tts_engine=qwen3，tts_infer=qwen3
+  用 CosyVoice 时 tts_engine=cosyvoice
+
+Unity 连接（把服务器 IP 换成展项网卡地址，例如 10.0.7.x）：
+  莫奈 TTS：  ws://服务器IP:8848/ws/monet/tts
+  莫奈对话：  ws://服务器IP:8848/ws/monet/chat
+  妇好 TTS：  ws://服务器IP:8848/ws/fuhao/tts
+  妇好对话：  ws://服务器IP:8848/ws/fuhao/chat
+  旧客户端：  ws://服务器IP:8848/ws/tts   （按莫奈接入）
+
+机器人 ask：
+  POST http://服务器IP:8848/api/monet/robot/ask
+  POST http://服务器IP:8848/api/fuhao/robot/ask
+  同一时刻只能一轮。tts_ws_clients 要大于 0，否则字幕/音频没人收。
+
+llama 加载大约半分钟。CosyVoice 大约 1～2 分钟，Qwen3-TTS 也要等模型进显存。不要在 8848 刚起来就测语音。
+
+
+六、日志在哪、怎么看
+------------------
+目录一律：C:\digital_human\logs\
+
+文件                      谁写的                 看什么
+autostart.log             start-server.ps1       有没有找到 python、tts=、model= 指向哪套语音
+digital-human.out.log     uvicorn / 业务 print   服务启动、语音加载、Unity 连 WS；文件很大时不要只看末尾
+startup.log               server9 启动           [BOOT] 是否 ready，load_index 有没有 FAIL
+tts-load.log              语音加载               CosyVoice 或 Qwen3-TTS 的失败原因
+ws.log                    WebSocket 握手         Unity 有没有连上
+llm-autostart.log         start-llm.ps1          llama 脚本是否 skip / 是否找到模型
+llama.out.log             llama_cpp.server       8080 加载 GGUF、报错
+robot-api.log             机器人 ask/推流        检索、LLM、409、有没有前端 WS
+
+常用查看：
+
+  Get-Content C:\digital_human\logs\llm-autostart.log
+  Get-Content C:\digital_human\logs\autostart.log -Tail 20
+  Get-Content C:\digital_human\logs\startup.log
+  Get-Content C:\digital_human\logs\tts-load.log
+  Get-Content C:\digital_human\logs\ws.log -Tail 30
+  Get-Content C:\digital_human\logs\robot-api.log -Tail 80
+  Get-Content C:\digital_human\logs\llama.out.log -Tail 80
+
+  Select-String -Path C:\digital_human\logs\digital-human.out.log -Pattern "启动完成|CosyVoice|Qwen3-TTS|ERROR|失败" | Select-Object -Last 30
+
+计划任务最近一次结果：
+
+  Get-ScheduledTaskInfo -TaskName DigitalHuman, DigitalHumanLLM |
+    Format-List TaskName, LastTaskResult
+
+  LastTaskResult=0 表示进程已退出（对常驻服务来说不正常）。
+  任务在跑时 State 应为 Running。2147946720 这类码在“进程还在阻塞跑”时可以忽略，以 State 和端口为准。
+
+
+七、手工启停（当天排障用）
+------------------------
+先停再起（会杀掉本机 python，请确认没有别人在用 robot 环境跑别的脚本）：
+
+  Stop-ScheduledTask -TaskName DigitalHuman
+  Stop-ScheduledTask -TaskName DigitalHumanLLM
+  Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force
+  Start-Sleep 2
+  Start-ScheduledTask -TaskName DigitalHumanLLM
+  Start-Sleep 20
+  Start-ScheduledTask -TaskName DigitalHuman
+
+只换语音、不动 8080 时，用 switch.bat restart，不要把 llama 一起停掉。
+
+
+八、常见故障
+------------
+1) health 里 llm=False
+   看 llama.out.log 和 llm-autostart.log。确认模型文件在项目 models 目录。
+   确认没有别人占用 8080。
+
+2) health 里 tts=False，tts_error 含 No module named 'qwen_tts'
+   robot 环境还没装 qwen-tts。在项目根目录执行 deploy\install-robot-deps.bat，再 switch.bat restart。
+
+3) 装完 qwen-tts 之后 CosyVoice 报 onnxruntime
+   qwen-tts 把 onnxruntime 升走了。再执行一遍安装脚本。
+   它会 --force-reinstall --no-deps 装回 onnxruntime-gpu==1.23.2。不要改用根目录 requirements.txt 里的 1.29.0。
+
+4) health 里 tts=False，走的是 CosyVoice
+   看 tts-load.log，并对照 autostart.log 里的 model=。
+   切到 2 时目录里要有 cosyvoice2.yaml；切到 3 时要有 cosyvoice3.yaml。
+   参考音超过 30 秒会被拒，脚本会裁成 *_le8s.wav。
+   CosyVoice 必须在 C:\ro\CosyVoice。
+
+5) health 里 chunks=0，开口就是「这个我还不太清楚」
+   磁盘上的知识库还在（persona.knowledge_ready 仍可能是 true），但这轮进程没把索引读进内存。
+   看 startup.log 里的 load_index FAIL。llm=True 只说明 8080 通了，不代表检索可用。
+
+6) Unity 403 / 没声音
+   必须连 /ws/monet/tts 或 /ws/fuhao/tts（旧 /ws/tts 也可以）。
+   看 ws.log 有没有握手。health 里 tts_ws_clients 应为 1 或更多。
+   robot-api.log 若写“没有前端连接”，先开 Unity 再 ask。
+
+7) 409 turn_in_progress
+   上一轮还在讲。等本轮结束再问。这是正常的。
+
+8) 说「有点不舒服」或念资料不像人设
+   8080 没起来。先保 llama，再保 8848。
+
+
+九、和旧 bat 的关系
+------------------
+以前手工：
+  @echo off
+  chcp 65001 >nul
+  cd /d C:\ro
+  start "LLAMA_CPP_Server" cmd /k "conda activate robot && python -m llama_cpp.server --model ""C:\ro\models\Qwen3-8B-Q4_K_M.gguf"" --n_gpu_layers -1 --n_ctx 2048 --host 127.0.0.1 --port 8080 --chat_format chatml"
+
+开机任务已经按同样参数拉 llama，只是隐藏窗口 + 写 llama.out.log。
+开机后不要再双击旧 bat，否则 8080 会冲突（脚本虽会 skip，但两个窗口容易搞混）。
+
+讲解员也不要用旧的 python app.py（会和库里的 import app 撞名）。一律用计划任务或 start-server.ps1。
+
+
+十、目录对照（不要乱删）
+----------------------
+C:\digital_human\                 讲解员项目
+C:\digital_human\server9\         运行代码
+C:\digital_human\deploy\          开机脚本、切换脚本、安装脚本和本文
+C:\digital_human\deploy\install-robot-deps.bat
+                                  给 robot 环境装 qwen-tts，并换回 onnxruntime-gpu 1.23.2
+C:\digital_human\deploy\requirements-robot.txt
+                                  上面两个包的清单。不要 pip install -r
+C:\digital_human\deploy\last-start.txt
+                                  上次 switch.bat 的配置，开机读这个
+                                  llm=4 或 8，tts=cosyvoice 或 qwen3，cosyvoice=2 或 3
+C:\digital_human\deploy\cosyvoice.model
+                                  语音 2 或 3。last-start.txt 优先，没有时再读这个文件
+C:\digital_human\deploy\llm.model 讲解模型 4 或 8
+C:\digital_human\models\          GGUF、Qwen3-TTS-12Hz-0.6B-Base、gte-base-zh
+C:\digital_human\logs\            全部日志
+C:\digital_human\voice\           参考音
+C:\digital_human\index\           FAISS 知识库
+C:\ro\CosyVoice\                  CosyVoice 代码和两套权重（不要打进项目包）
+C:\Users\BroadMesse\miniconda3\envs\robot\   conda 环境 robot

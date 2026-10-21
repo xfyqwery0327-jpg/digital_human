@@ -1,0 +1,39 @@
+loading D:\projects\CosyVoice\pretrained_models\Fun-CosyVoice3-0.5B
+loaded 8.1s sr=24000
+synth clip=00_06 script=1
+wrote 00_06/s1.wav 42.6s in 21.3s
+synth clip=00_06 script=2
+wrote 00_06/s2.wav 48.3s in 19.9s
+synth clip=00_06 script=3
+wrote 00_06/s3.wav 50.2s in 21.7s
+synth clip=03_09 script=1
+wrote 03_09/s1.wav 36.3s in 15.5s
+synth clip=03_09 script=2
+wrote 03_09/s2.wav 47.7s in 19.3s
+synth clip=03_09 script=3
+wrote 03_09/s3.wav 44.0s in 19.4s
+synth clip=06_12 script=1
+wrote 06_12/s1.wav 36.9s in 15.5s
+synth clip=06_12 script=2
+wrote 06_12/s2.wav 44.7s in 18.1s
+synth clip=06_12 script=3
+wrote 06_12/s3.wav 42.3s in 18.7s
+synth clip=09_15 script=1
+wrote 09_15/s1.wav 35.0s in 15.0s
+synth clip=09_15 script=2
+wrote 09_15/s2.wav 49.7s in 20.0s
+synth clip=09_15 script=3
+wrote 09_15/s3.wav 48.4s in 20.7s
+synth clip=12_18 script=1
+wrote 12_18/s1.wav 32.4s in 14.1s
+synth clip=12_18 script=2
+wrote 12_18/s2.wav 43.4s in 17.9s
+synth clip=12_18 script=3
+wrote 12_18/s3.wav 44.5s in 19.4s
+synth clip=18_21 script=1
+wrote 18_21/s1.wav 30.9s in 13.0s
+synth clip=18_21 script=2
+wrote 18_21/s2.wav 46.4s in 18.3s
+synth clip=18_21 script=3
+wrote 18_21/s3.wav 41.6s in 17.6s
+done
