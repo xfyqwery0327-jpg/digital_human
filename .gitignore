@@ -29,3 +29,6 @@ projectsdigital_human.pytest-tmp/
 .codegraph/
 CosyVoice/
 CosyVoice.lnk
+
+# 大体积方案文档（单个文件超过 GitHub 100MB 限制）
+妇好方案及知识库/

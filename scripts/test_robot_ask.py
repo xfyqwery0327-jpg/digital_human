@@ -16,6 +16,12 @@
 
 默认按人设三轮，模式 1。本脚本只 listen，不会把 asr/讲稿再丢回 type=tts。
 参考 robot-ask-ws-改动说明.md；双人设约束见 项目整体脉络.md。
+
+健壮性：
+- host 探测失败（如从开发机访问 10.0.7.232 被网络层 RST）自动回退 127.0.0.1，
+  --no-host-fallback 可关掉；
+- POST 遇 ConnectionReset/WinError 10054 自动退避重试 2 次；
+- 409 turn_in_progress 会明确提示"上一轮没讲完"，不当成脚本 bug。
 """
 from __future__ import annotations
 
@@ -88,27 +94,48 @@ def print_health(host: str, port: int):
             print(f"    {key}={health.get(key)!r}")
 
 
-def http_post_json(url: str, body: dict, token: str = "", timeout: float = 15.0) -> tuple[int, dict]:
+def _unreachable(e: Exception) -> bool:
+    """连接被重置/拒连/超时都算"路不通"，可以换 host 重试。"""
+    if isinstance(e, urllib.error.HTTPError):
+        return False
+    return isinstance(e, (ConnectionError, TimeoutError, OSError, urllib.error.URLError))
+
+
+def http_post_json(url: str, body: dict, token: str = "", timeout: float = 15.0,
+                   retries: int = 2) -> tuple[int, dict]:
     data = json.dumps(body, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json; charset=utf-8"}
     if token:
         headers["X-Robot-Token"] = token
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
+    last: Exception | None = None
+    for attempt in range(retries + 1):
+        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+                try:
+                    payload = json.loads(raw) if raw else {}
+                except json.JSONDecodeError:
+                    payload = {"raw": raw}
+                return resp.status, payload
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode("utf-8", errors="replace")
             try:
                 payload = json.loads(raw) if raw else {}
             except json.JSONDecodeError:
                 payload = {"raw": raw}
-            return resp.status, payload
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode("utf-8", errors="replace")
-        try:
-            payload = json.loads(raw) if raw else {}
-        except json.JSONDecodeError:
-            payload = {"raw": raw}
-        return e.code, payload
+            return e.code, payload
+        except Exception as e:  # noqa: BLE001
+            last = e
+            if attempt >= retries or not _unreachable(e):
+                raise
+            # 10.0.7.232 这种 LAN IP 偶发被中间网络层直接 RST（WinError 10054），
+            # 服务端其实毫发无伤，退避后重试一般就过。
+            wait = 0.5 * (attempt + 1)
+            print(f"  .. POST 连接异常 {type(e).__name__}: {e}，{wait:.1f}s 后重试 "
+                  f"({attempt + 1}/{retries})")
+            time.sleep(wait)
+    raise last if last else RuntimeError("unreachable")
 
 
 class TurnCollector:
@@ -368,6 +395,14 @@ async def run_one(ws, http_url: str, robot_id: str, session_id: Optional[str],
 def print_verdict(i: int, s: Dict[str, Any]):
     flag = "PASS" if s.get("pass") else "FAIL"
     print(f"\n--- 第 {i} 轮 {flag} ---")
+    http_status = s.get("http_status")
+    if http_status not in (200, 202):
+        body = s.get("http_body") or {}
+        print(f"  HTTP     {http_status}  {json.dumps(body, ensure_ascii=False)[:200]}")
+        if http_status == 409 or (isinstance(body, dict) and body.get("code") == "turn_in_progress"):
+            print("  诊断   409 turn_in_progress：上一轮还没讲完，服务端按设计拒绝并发提问。")
+            print("         等 tts_end（或用新 --session-id / 换 --robot-id）再发，不要连点。")
+        return
     print(f"  顺序     {s.get('order')}")
     print(f"  start/end {s.get('tts_start')}/{s.get('tts_end')}  "
           f"(必须都是 1)")
@@ -401,10 +436,11 @@ def open_ws(ws_url: str, token: str):
     import websockets
     headers = {"X-Robot-Token": token} if token else None
     kwargs = {"max_size": 8 * 1024 * 1024}
-    try:
-        return websockets.connect(ws_url, additional_headers=headers, **kwargs)
-    except TypeError:
-        return websockets.connect(ws_url, extra_headers=headers, **kwargs)
+    # websockets>=11 的 websockets.connect 是 legacy 实现，只认 extra_headers；
+    # 传 additional_headers 不会在调用处报错，而是被原样塞进 **kwargs 透传给
+    # loop.create_connection()，等到 await 建连时才抛 TypeError，外层的
+    # try/except 根本抓不到。所以直接用 extra_headers。
+    return websockets.connect(ws_url, extra_headers=headers, **kwargs)
 
 
 async def main_async(args):
@@ -427,6 +463,23 @@ async def main_async(args):
         http_url = f"http://{args.host}:{args.port}/api/{persona_id}/robot/ask"
         ws_url = f"ws://{args.host}:{args.port}/ws/{persona_id}/tts"
         expect_persona = persona_id
+
+    # 现场默认 host 是 10.0.7.232，但从部分开发机/沙箱过去会被中间网络层
+    # 直接 RST（GET /health 403、POST WinError 10054），服务端本身是好的。
+    # 先探活，不通就自动回退本机回环，避免把"路不通"误判成"服务挂了"。
+    if not args.no_host_fallback and args.host not in ("127.0.0.1", "localhost"):
+        try:
+            http_get_json(f"http://{args.host}:{args.port}/health", timeout=5.0)
+        except Exception as e:
+            print(f"  ⚠️ {args.host}:{args.port} 探测失败（{type(e).__name__}: {e}）"
+                  f"，自动回退 127.0.0.1")
+            args.host = "127.0.0.1"
+            if args.legacy:
+                http_url = f"http://127.0.0.1:{args.port}/api/robot/ask"
+                ws_url = f"ws://127.0.0.1:{args.port}/ws/tts"
+            else:
+                http_url = f"http://127.0.0.1:{args.port}/api/{persona_id}/robot/ask"
+                ws_url = f"ws://127.0.0.1:{args.port}/ws/{persona_id}/tts"
 
     queries = list(args.queries) if args.queries else list(DEFAULT_QUERIES.get(expect_persona, DEFAULT_QUERIES["monet"]))
     if args.query:
@@ -490,6 +543,8 @@ def parse_args():
     p.add_argument("--gap", type=float, default=1.0, help="轮与轮之间间隔秒")
     p.add_argument("--echo-tts", action="store_true",
                    help="收到 llm_answer 后再发 type=tts，用来复现双流")
+    p.add_argument("--no-host-fallback", action="store_true",
+                   help="禁止 host 探测失败时自动回退 127.0.0.1")
     p.add_argument("queries", nargs="*", default=[],
                    help="自定义问句；不填则用 --persona-id 对应默认三轮")
     return p.parse_args()
