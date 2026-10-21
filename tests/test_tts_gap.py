@@ -59,12 +59,14 @@ def test_group_chunks_merges_up_to_cap():
     assert group_speak_chunks(["你好，", long_one], 40) == ["你好，", long_one]
 
 
-def test_planner_sends_single_clause_until_measured():
+def test_planner_first_round_fills_batch_without_merging():
     from tts.planner import UnitPlanner
-    p = UnitPlanner(40)
+    p = UnitPlanner(16)
     backlog = ["我是莫奈，", "今天陪你看画，", "先说睡莲。"]
-    assert p.take(backlog, ahead_sec=10.0, max_units=8) == ["我是莫奈，"]
-    assert backlog == ["今天陪你看画，", "先说睡莲。"]
+    assert p.take(backlog, ahead_sec=0.0, max_units=6) == [
+        "我是莫奈，", "今天陪你看画，", "先说睡莲。",
+    ]
+    assert backlog == []
 
 
 def test_planner_cap_tracks_client_buffer():
@@ -80,19 +82,148 @@ def test_planner_cap_tracks_client_buffer():
     assert p.take(list(backlog), ahead_sec=0.0) == ["一二三，"]
     assert p.take(list(backlog), ahead_sec=1.3, max_units=3) == ["一二三，四五六，", "七八九十。"]
     rest = ["一二三，", "四五六七八九十。", "好。"]
-    assert p.take(rest, ahead_sec=0.0, max_units=3) == ["一二三，"]
-    assert rest == ["四五六七八九十。", "好。"]
+    assert p.take(rest, ahead_sec=0.0, max_units=3) == ["一二三，", "四五六七八九十。", "好。"]
+    assert rest == []
 
 
-def test_planner_batch_round_uses_longest_unit():
+def test_planner_batch_round_uses_total_audio():
     from tts.planner import UnitPlanner
-    p = UnitPlanner(40)
+    p = UnitPlanner(16)
     p.observe_round([(4, 1.0, 0.01), (8, 2.0, 0.01)], batch_sec=1.99)
-    assert abs(p.k - 1.0) < 1e-6
+    assert abs(p.k - (2.01 / 3.0)) < 1e-6
     assert abs(p.cps - 4.0) < 1e-6
     p.observe(0, 1.0, 1.0)
     p.observe(4, 0.1, 1.0)
-    assert abs(p.k - 1.0) < 1e-6
+    assert abs(p.k - (2.01 / 3.0)) < 1e-6
+
+
+def test_coalesce_fills_until_four_and_keeps_the_rest():
+    import ws.tts as wst
+
+    async def scenario():
+        queue = asyncio.Queue()
+        backlog = ["第一句。"]
+        await queue.put("第二句。")
+        await queue.put("第三句。")
+
+        async def feed():
+            await asyncio.sleep(0.05)
+            await queue.put("第四句。")
+            await queue.put("第五句。")
+            await queue.put(None)
+
+        task = asyncio.create_task(feed())
+        eof = await wst.coalesce_backlog(queue, backlog, 4, 0.8)
+        await task
+        return eof, list(backlog), queue.empty()
+
+    eof, backlog, empty = asyncio.run(scenario())
+    assert eof is True
+    assert backlog == ["第一句。", "第二句。", "第三句。", "第四句。", "第五句。"]
+    assert empty
+
+
+def test_coalesce_stops_on_timeout_or_end():
+    import ws.tts as wst
+
+    async def scenario():
+        quiet = asyncio.Queue()
+        one = ["只有一句。"]
+        t0 = asyncio.get_running_loop().time()
+        eof_timeout = await wst.coalesce_backlog(quiet, one, 4, 0.05)
+        waited = asyncio.get_running_loop().time() - t0
+        ended = asyncio.Queue()
+        await ended.put(None)
+        two = ["第一句。"]
+        eof_end = await wst.coalesce_backlog(ended, two, 4, 0.8)
+        return eof_timeout, waited, list(one), eof_end, list(two)
+
+    eof_timeout, waited, one, eof_end, two = asyncio.run(scenario())
+    assert eof_timeout is False and one == ["只有一句。"]
+    assert waited < 0.4
+    assert eof_end is True and two == ["第一句。"]
+
+
+def test_split_by_marks_keeps_book_title_whole():
+    from tts.speaktext import split_by_marks
+    assert split_by_marks("我画的《睡莲》是晚年最重要的作品。") == [
+        "我画的《睡莲》",
+        "是晚年最重要的作品。",
+    ]
+    assert split_by_marks("《日出·印象》画于勒阿弗尔。") == [
+        "《日出·印象》",
+        "画于勒阿弗尔。",
+    ]
+    assert split_by_marks("看《睡莲，印象》吧。") == [
+        "看《睡莲，印象》",
+        "吧。",
+    ]
+    assert split_by_marks("是晚年最重要的作品，在吉维尼。") == [
+        "是晚年最重要的作品，",
+        "在吉维尼。",
+    ]
+    whole = "我画的《睡莲》是晚年最重要的作品。"
+    assert "最重" not in "".join(p for p in split_by_marks(whole) if "重要" not in p)
+
+
+def test_planner_splits_on_title_and_punct_not_char_count():
+    from tts.planner import UnitPlanner
+    p = UnitPlanner(5, split_marks=True)
+    backlog = ["我画的《睡莲》是晚年最重要的作品。", "短句。"]
+    got = p.take(backlog, ahead_sec=0.0, max_units=6)
+    assert got == ["我画的《睡莲》", "是晚年最重要的作品。", "短句。"]
+    assert backlog == []
+
+
+def test_wait_first_sentence_until_period():
+    import ws.tts as wst
+
+    async def scenario():
+        queue = asyncio.Queue()
+        backlog = ["我画的《睡莲》是晚年最重要的作品，"]
+
+        async def feed():
+            await asyncio.sleep(0.05)
+            await queue.put("在吉维尼的池塘。")
+            await queue.put("下一句，")
+
+        task = asyncio.create_task(feed())
+        eof = await wst.wait_first_sentence(queue, backlog, 1.0)
+        await task
+        return eof, list(backlog)
+
+    eof, backlog = asyncio.run(scenario())
+    assert eof is False
+    assert backlog == [
+        "我画的《睡莲》是晚年最重要的作品，",
+        "在吉维尼的池塘。",
+        "下一句，",
+    ]
+
+
+def test_planner_replay_keeps_later_rounds_full():
+    """按 14:13 那轮的句长走一遍。首轮取满 6 段；整批记速后 k<1，后续仍取满。"""
+    from tts.planner import UnitPlanner
+    lengths = [30, 10, 10, 10, 7, 15, 19, 11, 23, 12, 20, 7, 10, 6, 9]
+    backlog = [("字" * n) + "。" for n in lengths]
+    p = UnitPlanner(5)
+    rounds = []
+    ks = []
+    ahead = 0.0
+    while backlog:
+        units = p.take(backlog, ahead, max_units=6)
+        assert units, "backlog 还有文本时不应空转"
+        rounds.append(units)
+        audio = [max(0.4, len(u) * 0.22) for u in units]
+        wall = 6.0 + 0.25 * max(len(u) for u in units)
+        p.observe_round(
+            [(len(u), a, 0.01) for u, a in zip(units, audio)],
+            batch_sec=wall,
+        )
+        ks.append(p.k)
+        ahead = max(0.0, ahead - wall) + sum(audio)
+    assert [len(r) for r in rounds] == [6, 6, 3]
+    assert ks[0] < 1.0 and ks[1] < 1.0
 
 
 class _FakeQwen:
@@ -270,10 +401,12 @@ def test_visitor_keeps_per_clause_without_merge(monkeypatch):
 def test_visitor_qwen_prefetches_planned_units_as_one_batch(monkeypatch):
     text = "我是莫奈，今天陪你看画，先说睡莲，再说日出，最后讲花园，然后去看桥。"
     pushed, prefetched, _frames = _run_visitor_turn(
-        monkeypatch, text, merge_chars=8, engine="qwen3", ahead=10.0)
+        monkeypatch, text, merge_chars=8, engine="qwen3", ahead=0.0)
     units = [s for _i, s in pushed]
+    assert units == [
+        "我是莫奈，", "今天陪你看画，", "先说睡莲，",
+        "再说日出，", "最后讲花园，", "然后去看桥。",
+    ]
     assert "".join(units) == text
-    assert units[0] == "我是莫奈，"
-    assert all(len(u) <= 8 or "，" not in u[:-1] for u in units)
-    assert prefetched == [units[1:]]
-    assert len(prefetched[0]) >= 2
+    assert prefetched == [units]
+    assert len(prefetched[0]) == 6

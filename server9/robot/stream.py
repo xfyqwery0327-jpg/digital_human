@@ -340,9 +340,14 @@ async def push_robot_turn_to_ws(speak_text: str, speaker: str,
             # 推送不等播放，推完立刻合成下一段。CosyVoice3 / Qwen3-TTS 每次调用都要重算参考音前缀：
             # Unity 缓冲少时只送一个小句，缓冲够再拼长；Qwen 排着的几段一次 batch。
             # 不要退回整段一次合成：talker 逐帧自回归，150 字要串行跑四五百帧，首句等太久。
-            from config import QWEN_TTS_BATCH
+            from config import QWEN_TTS_BATCH, QWEN_TTS_SPLIT_CHARS
             loop = asyncio.get_running_loop()
-            planner = UnitPlanner(tts.clause_merge_chars())
+            qwen = engine == "qwen3"
+            planner = UnitPlanner(
+                tts.clause_merge_chars(),
+                split_chars=QWEN_TTS_SPLIT_CHARS if qwen else 0,
+                split_marks=qwen and QWEN_TTS_SPLIT_CHARS <= 0,
+            )
             max_units = QWEN_TTS_BATCH if engine == "qwen3" else 1
             backlog = list(sentences)
             bps = 2.0 * float(sr)

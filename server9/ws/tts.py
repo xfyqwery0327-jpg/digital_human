@@ -29,6 +29,83 @@ from ws.session_wire import tts_wire_allowed
 from robot.hub import robot_hub
 from rag.scope import is_other_exhibition_query, clamp_hall_answer, hall_safe_sentence, locked_category, refuse_text
 
+_STRONG_END = "。！？.!"
+
+
+def backlog_has_strong_end(backlog) -> bool:
+    """已经有一句以句号、问号或叹号收尾。"""
+    for item in backlog:
+        text = item if isinstance(item, str) else ""
+        if text and text[-1] in _STRONG_END:
+            return True
+    return False
+
+
+async def wait_first_sentence(queue, backlog, timeout: float, cancel_ev=None) -> bool:
+    """首句等到句号类标点再开声。超时、结束或取消也停。返回文本是否已经结束。"""
+    eof = False
+    if timeout <= 0 or backlog_has_strong_end(backlog):
+        return False
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + float(timeout)
+    while not backlog_has_strong_end(backlog):
+        if cancel_ev is not None and cancel_ev.is_set():
+            break
+        left = deadline - loop.time()
+        if left <= 0:
+            break
+        try:
+            item = await asyncio.wait_for(queue.get(), left)
+        except asyncio.TimeoutError:
+            break
+        if item is None:
+            eof = True
+            break
+        backlog.append(item)
+    while not eof and not queue.empty():
+        item = queue.get_nowait()
+        if item is None:
+            eof = True
+            break
+        backlog.append(item)
+    return eof
+
+
+async def coalesce_backlog(queue, backlog, min_units: int, timeout: float,
+                           cancel_ev=None) -> bool:
+    """句子还没凑满 min_units 时再等一会儿。返回文本是否已经结束。
+
+    游客问答是逐句送进来的。第一句一到就开算，后面的句子进不了这一次 generate。
+    凑满、超时、收到结束标记或取消，都会停。
+    """
+    eof = False
+    if min_units <= 0 or timeout <= 0 or len(backlog) >= min_units:
+        return False
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + float(timeout)
+    while len(backlog) < min_units:
+        if cancel_ev is not None and cancel_ev.is_set():
+            break
+        left = deadline - loop.time()
+        if left <= 0:
+            break
+        try:
+            item = await asyncio.wait_for(queue.get(), left)
+        except asyncio.TimeoutError:
+            break
+        if item is None:
+            eof = True
+            break
+        backlog.append(item)
+    while not eof and not queue.empty():
+        item = queue.get_nowait()
+        if item is None:
+            eof = True
+            break
+        backlog.append(item)
+    return eof
+
+
 async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str,
                              speaker: str, enable_llm: bool, session_id: str,
                              cancel_ev: threading.Event,
@@ -214,7 +291,12 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
         客户端缓冲少时只送一个小句，缓冲够再把后面的小句拼长；Qwen3-TTS 把排着的几段一次 batch。
         """
         nonlocal seq, cancelled, last_pcm_ok, sent_idx
-        planner = UnitPlanner(merge_chars)
+        planner = UnitPlanner(
+            merge_chars,
+            split_chars=QWEN_TTS_SPLIT_CHARS if qwen_batch else 0,
+            split_marks=qwen_batch and QWEN_TTS_SPLIT_CHARS <= 0,
+        )
+        _diag = [0]
         backlog = []
         eof = False
         last_item = None
@@ -234,9 +316,44 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
                     backlog.append(item)
             if not backlog:
                 break
+            if (qwen_batch and model_ok and not eof and pcm_bytes_sent <= 0
+                    and QWEN_TTS_FIRST_MS > 0
+                    and not backlog_has_strong_end(backlog)):
+                before_n = len(backlog)
+                t_wait = time.time()
+                if await wait_first_sentence(
+                        audio_queue, backlog, QWEN_TTS_FIRST_MS / 1000.0, cancel_ev):
+                    eof = True
+                waited = time.time() - t_wait
+                if len(backlog) != before_n or waited >= 0.05:
+                    tts._tts_log(
+                        "[TTS] 首句等待标点 %s->%s 等%.2fs eof=%s session=%s"
+                        % (before_n, len(backlog), waited, int(eof), session_id[:8]))
+            elif (qwen_batch and model_ok and not eof
+                    and QWEN_TTS_COALESCE_MS > 0
+                    and len(backlog) < QWEN_TTS_COALESCE_UNITS):
+                before_n = len(backlog)
+                t_wait = time.time()
+                if await coalesce_backlog(
+                        audio_queue, backlog, QWEN_TTS_COALESCE_UNITS,
+                        QWEN_TTS_COALESCE_MS / 1000.0, cancel_ev):
+                    eof = True
+                waited = time.time() - t_wait
+                if len(backlog) != before_n or waited >= 0.05:
+                    tts._tts_log(
+                        "[TTS] 开算前攒句 %s->%s 等%.2fs eof=%s session=%s"
+                        % (before_n, len(backlog), waited, int(eof), session_id[:8]))
+            if not backlog:
+                break
             ahead = play_clock.remain(tail=0.0)
             units = planner.take(backlog, ahead,
                                  max_units=QWEN_TTS_BATCH if qwen_batch and model_ok else 1)
+            if _diag[0] < 16:
+                _cap = planner.char_cap(ahead)
+                print(f"[DIAG] iter={_diag[0]} ahead={ahead:.2f} k={planner.k} "
+                      f"cps={planner.cps} cap={_cap} units={len(units)} "
+                      f"chars={sum(len(u) for u in units)}")
+                _diag[0] += 1
             items = []
             for text in units:
                 items.append((text, sent_idx))

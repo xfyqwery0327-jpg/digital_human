@@ -125,6 +125,44 @@ def _split_punct_keep_decimal(text: str) -> list:
     return parts
 
 
+def split_by_marks(text: str) -> list:
+    """只在标点或书名号右界断开。《》里面的逗号、句号都不切。
+
+    「我画的《睡莲》是晚年最重要的作品。」切成
+    「我画的《睡莲》」和「是晚年最重要的作品。」
+    不按字数从「最重」和「要」中间断开。
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return []
+    parts = []
+    buf = []
+    depth = 0
+    for ch in raw:
+        buf.append(ch)
+        if ch == "《":
+            depth += 1
+            continue
+        if ch == "》":
+            if depth > 0:
+                depth -= 1
+            if depth == 0:
+                piece = "".join(buf).strip()
+                if piece:
+                    parts.append(piece)
+                buf = []
+            continue
+        if depth == 0 and ch in "，。！？；、,.!?":
+            piece = "".join(buf).strip()
+            if piece:
+                parts.append(piece)
+            buf = []
+    tail = "".join(buf).strip()
+    if tail:
+        parts.append(tail)
+    return parts or [raw]
+
+
 def split_speak_chunks(text: str, max_chars: int = 40) -> list:
     """按 ，。！？；、 切开。完整句不粘下一段；尾句单独成段，禁止粘到上一句。"""
     raw = (text or "").strip()

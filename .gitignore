@@ -2,6 +2,17 @@
 models/
 *.gguf
 *.rar
+妇好方案及知识库/妇好-多媒体方案-0825.pptx
+
+# cmd 把 curl / 命令参数落成的空文件，不是源码
+monet/Accept
+monet/GET
+monet/Host
+monet/User-Agent
+monet/curl.exe
+monet/findstr
+monet/min_mb
+monet/python
 
 # 本机环境与运行时
 .venv-kb/

@@ -175,11 +175,14 @@ def clause_merge_chars() -> int:
 
     CosyVoice3（本地 / 独立进程）和 Qwen3-TTS 都是整句出声，每次调用固定要重算参考音前缀，
     逗号一句一调会让句间空档等于整句合成耗时。CosyVoice2 走 hop 流式，保持逐小句。
+    Qwen 用更短的拼句上限，避免一段几十个字把整批墙钟拖死。
     """
+    from tts.engine import use_qwen_tts
+    if use_qwen_tts():
+        return QWEN_TTS_MERGE_CHARS
     if not TTS_MERGE_CHARS:
         return 0
-    from tts.engine import use_qwen_tts
-    if use_qwen_tts() or _remote_on() or _cosyvoice3_loaded():
+    if _remote_on() or _cosyvoice3_loaded():
         return TTS_MERGE_CHARS
     if cosyvoice_model is None and "cosyvoice3" in str(COSYVOICE_MODEL).lower():
         return TTS_MERGE_CHARS
@@ -383,6 +386,64 @@ def _install_token2wav_guard(model):
         return speech
 
     model.token2wav = guarded
+
+
+# CosyVoice3 采样稳定性补丁（tests/cv3_stopwatch.py / cv3_refcheck.py 实测）：
+# 1) CosyVoice3LM.eos_token = speech_token_size + 1，而 Qwen2LM.sampling_ids 在
+#    min_len 前只屏蔽 weighted_scores[speech_token_size]——那是 cv3 的 sos，不是 eos。
+#    eos/task_id/fill 在 min_len 前就能被采到，生成 6~100 个 token 就断，
+#    flow 只拿到极少 token，出声就是截断/无声，听起来整段像杂音。
+# 2) eos 本身也偏早：30 字课文实测要 ~277 token 才完整，stock min_token_text_ratio=2
+#    只要 60 就允许停，句子讲一半就没了。
+# 3) max_token_text_ratio=20 → 600 token（24s），啰嗦模型压不住，一句讲 24 秒。
+# 修法：min_len 前屏蔽全部特殊 token；min_len 后只留 eos；cv3 的 min/max 比例
+# 上调到 6/14（cv2 是另一套校准，不装这个补丁）。
+CV3_MIN_TOKEN_TEXT_RATIO = 6.0
+CV3_MAX_TOKEN_TEXT_RATIO = 14.0
+
+
+def _install_cv3_sampling_guard(model):
+    """CosyVoice3LM 采样补丁：防早停 eos / 特殊 token 泄露 / 无限啰嗦。"""
+    if model is None:
+        return
+    llm = getattr(model, "llm", None)
+    if llm is None or type(llm).__name__ != "CosyVoice3LM":
+        return
+    if getattr(llm, "_s9_sampling_guard", False):
+        return
+    orig_sampling_ids = llm.sampling_ids
+    orig_inference = llm.inference
+    stops = list(getattr(llm, "stop_token_ids", []) or [])
+    eos = getattr(llm, "eos_token", None)
+
+    def _sampling_ids(weighted_scores, decoded_tokens, sampling, ignore_eos=True):
+        scores = weighted_scores
+        if ignore_eos is True:
+            # min_len 之前：特殊 token 一个都不许出（含被 stock 代码漏掉的 eos）
+            for t in stops:
+                scores[t] = -float("inf")
+        else:
+            # min_len 之后：只放 eos，sos/task_id/fill 等仍禁
+            for t in stops:
+                if t != eos:
+                    scores[t] = -float("inf")
+        return orig_sampling_ids(scores, decoded_tokens, sampling, ignore_eos)
+
+    def _inference(text, text_len, prompt_text, prompt_text_len,
+                   prompt_speech_token, prompt_speech_token_len, embedding,
+                   sampling=25, max_token_text_ratio=20,
+                   min_token_text_ratio=2, uuid=""):
+        return orig_inference(text, text_len, prompt_text, prompt_text_len,
+                              prompt_speech_token, prompt_speech_token_len,
+                              embedding, sampling,
+                              CV3_MAX_TOKEN_TEXT_RATIO,
+                              CV3_MIN_TOKEN_TEXT_RATIO, uuid)
+
+    llm.sampling_ids = _sampling_ids
+    llm.inference = _inference
+    llm._s9_sampling_guard = True
+    print("🩹 CosyVoice3 采样补丁已装 min_ratio=%s max_ratio=%s stops=%d" % (
+        CV3_MIN_TOKEN_TEXT_RATIO, CV3_MAX_TOKEN_TEXT_RATIO, len(stops)))
 
 
 def _scrub_spk_prompt(spk_id: str):
@@ -1450,6 +1511,7 @@ def _load_cosyvoice_unlocked():
             cosyvoice_model = CosyVoiceCls(COSYVOICE_MODEL, fp16=True)
         _tts_log("[TTS] %s() done sr=%s" % (CosyVoiceCls.__name__, getattr(cosyvoice_model, "sample_rate", "")))
         _install_token2wav_guard(cosyvoice_model.model)
+        _install_cv3_sampling_guard(cosyvoice_model.model)
     except Exception as e:
         import traceback
         traceback.print_exc()

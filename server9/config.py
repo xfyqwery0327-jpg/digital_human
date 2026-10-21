@@ -165,15 +165,26 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-# CosyVoice3 / Qwen3-TTS 一次只能整句出声，每次调用都要重算参考音前缀。
+# CosyVoice3 一次只能整句出声，每次调用都要重算参考音前缀。
 # 按逗号一句一调，固定开销会把句间空档拉长。这里把相邻小句拼到这个字数再合成。
 # 0 = 回到逐小句合成（CosyVoice2 流式不受影响，始终逐小句）。
 TTS_MERGE_CHARS = max(0, _env_int("TTS_MERGE_CHARS", 40))
+# Qwen3-TTS 相邻小句最多拼到这个字数。0 = 不拼句。环境变量 QWEN_TTS_MERGE_CHARS 可覆盖。
+QWEN_TTS_MERGE_CHARS = max(0, _env_int("QWEN_TTS_MERGE_CHARS", 5))
+# 0 = 不按字数硬切。Qwen 只在标点和书名号右界断开。环境变量可改回正数做字数硬切。
+QWEN_TTS_SPLIT_CHARS = max(0, _env_int("QWEN_TTS_SPLIT_CHARS", 0))
 # 整句合成的头尾静音只留这么多毫秒，句与句之间不再叠两段留白。0 = 不裁。
 TTS_TRIM_HEAD_MS = max(0, _env_int("TTS_TRIM_HEAD_MS", 40))
 TTS_TRIM_TAIL_MS = max(0, _env_int("TTS_TRIM_TAIL_MS", 160))
-# Qwen3-TTS 一次 generate 并行合成的句数。批内耗时≈最长那一句，4070 上 8 句以内显存足够。
-QWEN_TTS_BATCH = max(1, _env_int("QWEN_TTS_BATCH", 8))
+# Qwen3-TTS 一次 generate 并行合成的段数。12GB 卡上 8 段会把空闲显存打到 2GB 以下，
+# 批结束触发 empty_cache，下一批还要重新分配。6 段足够把 RTF 压到 1 以下。
+QWEN_TTS_BATCH = max(1, _env_int("QWEN_TTS_BATCH", 6))
+# 游客问答边生成边送句。凑满这么多句，或最多再等这么多毫秒，再开算。
+# 避免第一句单独合成、后面的句子进不了这一批。0 毫秒 = 不等。
+QWEN_TTS_COALESCE_UNITS = max(1, _env_int("QWEN_TTS_COALESCE_UNITS", 4))
+QWEN_TTS_COALESCE_MS = max(0, _env_int("QWEN_TTS_COALESCE_MS", 800))
+# 首句等到句号、问号、叹号，或最多再等这么多毫秒。标点还没到也可以先出，避免一直不开声。
+QWEN_TTS_FIRST_MS = max(0, _env_int("QWEN_TTS_FIRST_MS", 3000))
 # 1 = CosyVoice 的 Flow 走 TensorRT（需装 tensorrt，首次会编译 plan 几分钟）。失败自动退回 PyTorch。
 COSYVOICE_LOAD_TRT = os.environ.get("COSYVOICE_LOAD_TRT", "0").strip().lower() in {"1", "true", "yes"}
 

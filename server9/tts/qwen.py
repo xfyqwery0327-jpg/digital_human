@@ -59,10 +59,71 @@ def _log_tts(msg: str, fail: bool = False):
         print(msg)
 
 
+def _install_sdpa_mask_fix() -> bool:
+    """修 transformers 4.57.3 + torch<2.5 的 sdpa mask 崩溃。
+
+    masking_utils.sdpa_mask_older_torch 里：
+        causal_mask = causal_mask[None, None, :, :].expand(batch_size, -1, -1, -1)
+        ...
+        causal_mask |= torch.all(~causal_mask, dim=-1, keepdim=True)
+    expand 出来的是 stride-0 视图，batch>1 时原地 |= 直接抛
+    "more than one element of the written-to tensor refers to a single memory
+    location"。批量合成走到 speech_tokenizer.decode 就崩，只能退回逐句，
+    每句重算参考音 + talker batch=1，RTF 2.2~2.8 追不上播放，播报就断断续续。
+    clone() 之后每行独立修补，也正是这个补丁本来的语义（按行补全无人可注意的
+    query，防 NaN）。
+    """
+    try:
+        import torch
+        import transformers.masking_utils as mu
+    except Exception:
+        return False
+    if getattr(mu, "_s9_sdpa_mask_fix", False):
+        return True
+    need = ("prepare_padding_mask", "_ignore_causal_mask_sdpa", "_vmap_for_bhqkv",
+            "causal_mask_function", "_is_torch_greater_or_equal_than_2_5")
+    if not all(hasattr(mu, n) for n in need):
+        return False
+
+    def _fixed(batch_size, cache_position, kv_length, kv_offset=0,
+               mask_function=None, attention_mask=None, local_size=None,
+               allow_is_causal_skip=True, allow_torch_fix=True, **kwargs):
+        q_length = cache_position.shape[0]
+        padding_mask = mu.prepare_padding_mask(attention_mask, kv_length, kv_offset)
+        if allow_is_causal_skip and mu._ignore_causal_mask_sdpa(
+                padding_mask, q_length, kv_length, kv_offset, local_size):
+            return None
+        kv_arange = torch.arange(kv_length, device=cache_position.device)
+        kv_arange += kv_offset
+        fn = mask_function or mu.causal_mask_function
+        causal_mask = mu._vmap_for_bhqkv(fn, bh_indices=False)(
+            None, None, cache_position, kv_arange)
+        causal_mask = causal_mask[None, None, :, :].expand(batch_size, -1, -1, -1)
+        if padding_mask is not None:
+            causal_mask = causal_mask * padding_mask[:, None, None, :]
+        if not mu._is_torch_greater_or_equal_than_2_5 and allow_torch_fix:
+            causal_mask = causal_mask.clone()
+            causal_mask |= torch.all(~causal_mask, dim=-1, keepdim=True)
+        return causal_mask
+
+    mu.sdpa_mask_older_torch = _fixed
+    if not mu._is_torch_greater_or_equal_than_2_6:
+        mu.sdpa_mask = _fixed
+        try:
+            from transformers.masking_utils import AttentionMaskInterface
+            AttentionMaskInterface._global_mapping["sdpa"] = _fixed
+        except Exception:
+            pass
+    mu._s9_sdpa_mask_fix = True
+    print("🩹 transformers sdpa mask 批量补丁已装 (torch<2.5, batch>1 不再崩)")
+    return True
+
+
 def _load_model(model_dir):
     import torch
     from qwen_tts import Qwen3TTSModel
 
+    _install_sdpa_mask_fix()
     use_cuda = bool(torch.cuda.is_available())
     kwargs = {
         "device_map": "cuda:0" if use_cuda else "cpu",

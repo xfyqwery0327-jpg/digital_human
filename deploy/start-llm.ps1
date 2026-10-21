@@ -71,19 +71,14 @@ function Test-Port8080 {
 }
 
 function Find-RobotPython {
-    $paths = New-Object System.Collections.Generic.List[string]
-    if ($env:CONDA_PREFIX) {
-        $paths.Add((Join-Path $env:CONDA_PREFIX "python.exe"))
-    }
-    if ($env:USERPROFILE) {
-        $paths.Add((Join-Path $env:USERPROFILE "miniconda3\envs\robot\python.exe"))
-        $paths.Add((Join-Path $env:USERPROFILE "anaconda3\envs\robot\python.exe"))
-    }
-    $paths.Add("C:\Users\BroadMesse\miniconda3\envs\robot\python.exe")
-    $paths.Add("C:\ProgramData\miniconda3\envs\robot\python.exe")
-    foreach ($p in $paths) {
-        if ($p -and (Test-Path $p)) { return $p }
-    }
+    $script = Join-Path $PSScriptRoot "server-env.ps1"
+    $log = Join-Path $env:TEMP "digital-human-server-env.log"
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -Action ensure > $log 2>&1
+    $code = $LASTEXITCODE
+    if (Test-Path $log) { Get-Content -Path $log | Out-Host }
+    if ($code -ne 0) { return $null }
+    $py = Join-Path $env:USERPROFILE ".conda\envs\digital_human_server\python.exe"
+    if (Test-Path $py) { return $py }
     return $null
 }
 
@@ -107,13 +102,21 @@ try {
 
     $Python = Find-RobotPython
     if (-not $Python) {
-        Write-Boot "python not found (conda env robot)"
-        throw "python not found, install conda env robot"
+        Write-Boot "python not found or digital_human_server version check failed"
+        throw "python not found, conda env digital_human_server is missing or versions do not match"
     }
 
     $CondaEnv = Split-Path $Python
     $env:CONDA_PREFIX = $CondaEnv
-    $env:PATH = $CondaEnv + ";" + $CondaEnv + "\Scripts;" + $CondaEnv + "\Library\bin;" + $env:PATH
+    $extras = @(
+        (Join-Path $CondaEnv "Scripts"),
+        (Join-Path $CondaEnv "Library\bin"),
+        (Join-Path $CondaEnv "Lib\site-packages\llama_cpp\lib"),
+        (Join-Path $CondaEnv "Lib\site-packages\torch\lib"),
+        "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin",
+        "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\bin"
+    ) | Where-Object { $_ -and (Test-Path $_) }
+    $env:PATH = ($CondaEnv + ";" + ($extras -join ";") + ";" + $env:PATH)
     $env:PYTHONUNBUFFERED = "1"
     $env:PYTHONUTF8 = "1"
     $env:PYTHONIOENCODING = "utf-8"

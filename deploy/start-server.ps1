@@ -37,25 +37,14 @@ function Test-Port8848 {
 }
 
 function Find-RobotPython {
-    $paths = New-Object System.Collections.Generic.List[string]
-    if ($env:CONDA_PREFIX) {
-        $paths.Add((Join-Path $env:CONDA_PREFIX "python.exe"))
-    }
-    if ($env:USERPROFILE) {
-        $paths.Add((Join-Path $env:USERPROFILE "miniconda3\envs\robot\python.exe"))
-        $paths.Add((Join-Path $env:USERPROFILE "anaconda3\envs\robot\python.exe"))
-        $paths.Add((Join-Path $env:USERPROFILE "Miniconda3\envs\robot\python.exe"))
-        $paths.Add((Join-Path $env:USERPROFILE "Anaconda3\envs\robot\python.exe"))
-    }
-    $paths.Add("C:\Users\BroadMesse\miniconda3\envs\robot\python.exe")
-    $paths.Add("C:\Users\BroadMesse\Miniconda3\envs\robot\python.exe")
-    $paths.Add("C:\ProgramData\miniconda3\envs\robot\python.exe")
-    $paths.Add("C:\ProgramData\anaconda3\envs\robot\python.exe")
-    foreach ($p in $paths) {
-        if ($p -and (Test-Path $p)) { return $p }
-    }
-    $cmd = Get-Command python -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
+    $script = Join-Path $PSScriptRoot "server-env.ps1"
+    $log = Join-Path $env:TEMP "digital-human-server-env.log"
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -Action ensure > $log 2>&1
+    $code = $LASTEXITCODE
+    if (Test-Path $log) { Get-Content -Path $log | Out-Host }
+    if ($code -ne 0) { return $null }
+    $py = Join-Path $env:USERPROFILE ".conda\envs\digital_human_server\python.exe"
+    if (Test-Path $py) { return $py }
     return $null
 }
 
@@ -138,8 +127,8 @@ try {
 
     $Python = Find-RobotPython
     if (-not $Python) {
-        Write-Boot "python not found"
-        throw "python not found, install conda env robot"
+        Write-Boot "python not found or digital_human_server version check failed"
+        throw "python not found, conda env digital_human_server is missing or versions do not match"
     }
     $CondaEnv = Split-Path $Python
     $env:CONDA_PREFIX = $CondaEnv
