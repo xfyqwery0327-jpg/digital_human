@@ -104,7 +104,7 @@ class TicketPromoter:
         info = _active_ticket(persona)
         if not info:
             return False
-        ticket_keywords = ["门票", "价格", "多少钱", "买票", "购票", "特展", "展览", "票"]
+        ticket_keywords = ["门票", "价格", "多少钱", "票价", "学生票", "优惠票"]
         if any(kw in question for kw in ticket_keywords):
             return True
         positive_keywords = ["喜欢", "不错", "有意思", "想看", "感兴趣"]

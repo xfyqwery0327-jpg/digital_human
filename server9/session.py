@@ -67,6 +67,7 @@ class SessionState:
         self.recommendation_count = 0
         self.sentiment_history: List[Sentiment] = []
         self.hook_used = set()
+        self.realtime_streak = 0
 
     def add_turn(self, question, answer, sources, sentiment=None, entities=None, intent=None):
         turn = ConversationTurn(question=question, answer=answer, sources=sources,
@@ -114,6 +115,13 @@ class SessionState:
             counts[s.label] += 1
         return max(counts, key=counts.get)
 
+    def bump_realtime(self) -> int:
+        self.realtime_streak = int(self.realtime_streak or 0) + 1
+        return self.realtime_streak
+
+    def clear_realtime(self) -> None:
+        self.realtime_streak = 0
+
     def should_recommend(self) -> bool:
         if not ENABLE_RECOMMENDATION:
             return False
@@ -131,7 +139,8 @@ class SessionState:
                 "last_recommendation_turn": self.last_recommendation_turn,
                 "recommendation_count": self.recommendation_count,
                 "sentiment_history": [s.to_dict() for s in self.sentiment_history],
-                "hook_used": list(self.hook_used)}
+                "hook_used": list(self.hook_used),
+                "realtime_streak": int(self.realtime_streak or 0)}
 
     @classmethod
     def from_dict(cls, data: Dict) -> 'SessionState':
@@ -143,6 +152,7 @@ class SessionState:
         session.last_recommendation_turn = data.get("last_recommendation_turn", -999)
         session.recommendation_count = data.get("recommendation_count", 0)
         session.hook_used = set(data.get("hook_used", []))
+        session.realtime_streak = int(data.get("realtime_streak") or 0)
         for turn_data in data.get("history", []):
             sentiment = Sentiment(**turn_data["sentiment"]) if turn_data.get("sentiment") else None
             entities = [Entity(**e) for e in turn_data.get("entities", [])]

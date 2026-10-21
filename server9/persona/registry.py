@@ -183,6 +183,12 @@ def _parse_persona(data: dict, fallback_id: str) -> PersonaConfig:
         intent_examples={str(k): _as_str_list(v) for k, v in intent.items()},
         warmup_text=str(data.get("warmup_text") or "测试。"),
         opening_strip_patterns=_as_str_list(data.get("opening_strip_patterns")),
+        realtime_first=str((data.get("realtime") or {}).get("first") or ""),
+        realtime_again=str((data.get("realtime") or {}).get("again") or ""),
+        realtime_hooks=_as_str_list((data.get("realtime") or {}).get("hooks")),
+        exhibit_aliases={
+            str(k): str(v) for k, v in (data.get("exhibit_aliases") or {}).items()
+        } if isinstance(data.get("exhibit_aliases") or {}, dict) else {},
     )
 
 

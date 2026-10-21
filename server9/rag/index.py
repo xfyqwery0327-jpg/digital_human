@@ -173,12 +173,18 @@ def load_index():
         shared_cmd = ["声音大一点", "音量调大", "大声点", "小声点", "声音小一点",
                       "暂停", "别说了", "停", "继续", "再说一遍", "重复一遍"]
         shared_chat = ["你好", "嗨", "您好", "你是谁", "你叫什么", "谢谢", "再见",
-                       "今天天气怎么样", "你会什么", "聊聊"]
+                       "你会什么", "聊聊"]
         for p in registry.enabled():
             examples = dict(p.intent_examples or {})
             examples.setdefault("command", shared_cmd)
             examples.setdefault("chitchat", shared_chat)
-            examples.setdefault("knowledge", [p.display_name, "这个展品是什么", "介绍一下"])
+            if "exhibit" not in examples and "person" not in examples:
+                examples.setdefault("knowledge", [p.display_name, "这个展品是什么", "介绍一下"])
+            examples.setdefault("weather", ["今天天气怎么样", "会下雨吗", "气温多少"])
+            examples.setdefault("news", ["最近有什么新闻", "今天的头条"])
+            examples.setdefault("ticket_service", [
+                "帮我预约明天门票", "我要订一张票", "买票", "帮我订票", "门票服务",
+            ])
             vecs = {}
             for label, exs in examples.items():
                 if not exs:

@@ -22,6 +22,15 @@ class IntentClassifier:
     @staticmethod
     def classify(query: str) -> Tuple[str, float, float]:
         """返回 (intent, raw_score, normalized_confidence)。同步函数，调用方负责放 executor。"""
+        from services.screen_hooks import is_ticket_booking
+        from rag.dialogue import rule_intent
+        if is_ticket_booking(query):
+            print("🎯 意图识别: ticket_service (预约)")
+            return "ticket_service", 1.0, 1.0
+        ruled = rule_intent(query)
+        if ruled:
+            print(f"🎯 意图识别: {ruled} (词表)")
+            return ruled, 1.0, 1.0
         if not ENABLE_INTENT or not rag._persona_intent_vecs:
             return "knowledge", 1.0, 1.0
         try:
@@ -36,6 +45,11 @@ class IntentClassifier:
         for label, intent_vec in vecs.items():
             raw_scores[label] = float(np.dot(q_vec, intent_vec))
         intent = max(raw_scores, key=raw_scores.get)
+        if intent == "ticket_service":
+            raw_scores.pop("ticket_service", None)
+            if not raw_scores:
+                return "knowledge", 1.0, 1.0
+            intent = max(raw_scores, key=raw_scores.get)
         max_raw = raw_scores[intent]
         values = list(raw_scores.values())
         min_v, max_v = min(values), max(values)

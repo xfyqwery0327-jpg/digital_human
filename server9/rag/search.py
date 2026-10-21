@@ -16,6 +16,7 @@ from session import SessionState
 from rag.intent import ner_system
 from rag import index as rag
 from rag.scope import locked_category
+from rag.visit import is_visit_query
 
 
 _GENERIC_WORKS = re.compile(
@@ -58,7 +59,37 @@ def _rewrite_query(query: str, persona, generic: bool) -> str:
     if generic:
         return (query + " 本厅展出的莫奈作品 日出·印象 睡莲 吉维尼花园 "
                 "卡美尔 滑铁卢桥 圣拉查尔火车站 野罂粟")
+    if (persona is not None and getattr(persona, "id", "") == "monet"
+            and is_visit_query(query)):
+        return query + " 浪漫与星辰 开放时间 门票 地址"
     return query
+
+
+def _is_hall_ticket(item) -> bool:
+    blob = (item.get("title") or "") + (item.get("source") or "") + (item.get("question") or "")
+    return "浪漫与星辰" in blob
+
+
+def _prefer_hall_clock(query: str, items, fused, persona):
+    """问开放时间、票价、地址时，把浪漫与星辰票务条排到传记前面。"""
+    if persona is None or getattr(persona, "id", "") != "monet" or not is_visit_query(query):
+        return fused
+    return sorted(fused, key=lambda pair: (0 if _is_hall_ticket(items[pair[0]]) else 1, -pair[1]))
+
+
+def _prefer_hall_clock_hits(query: str, hits, persona):
+    if not hits or persona is None or getattr(persona, "id", "") != "monet":
+        return hits
+    if not is_visit_query(query):
+        return hits
+    hall = [h for h in hits if _is_hall_ticket(h)]
+    if not hall:
+        return hits
+    if hall[0]["score"] < hits[0]["score"]:
+        lead = dict(hall[0])
+        lead["score"] = hits[0]["score"]
+        hall = [lead] + hall[1:]
+    return hall
 
 
 def _item_kind(item) -> int:
@@ -102,6 +133,7 @@ def search(query: str, top_k: int, category, session: Optional[SessionState] = N
            persona=None):
     if session:
         query, _ = ner_system.resolve_coreference(query, session)
+    asked = query
     generic_works = is_generic_works_query(query, persona)
     query = _rewrite_query(query, persona, generic_works)
     bundle = rag.bundle_for(persona)
@@ -149,6 +181,7 @@ def search(query: str, top_k: int, category, session: Optional[SessionState] = N
         seen.add(key)
         fused.append((item_idx, score))
     fused = _prefer_self_works(generic_works, items, fused, persona)
+    fused = _prefer_hall_clock(asked, items, fused, persona)
     cand = fused[:RERANK_CAND]
     if rag.HAS_RERANKER and rag.reranker:
         pairs = [(query, items[i]["text"][:COMPRESS_MAX]) for i, _ in cand]
@@ -157,14 +190,15 @@ def search(query: str, top_k: int, category, session: Optional[SessionState] = N
         ranked = sorted(zip(cand, probs), key=lambda x: -x[1])
         hits = [_fmt(items[i], i, recall_src, prob, "rerank")
                 for (i, _rrf), prob in ranked]
-        return _prefer_self_work_hits(generic_works, hits, persona)[:top_k]
+        hits = _prefer_self_work_hits(generic_works, hits, persona)
+        return _prefer_hall_clock_hits(asked, hits, persona)[:top_k]
     hits = [_fmt(items[i], i, recall_src, score, None)
             for i, score in fused[:top_k]]
     if generic_works and fused:
         orig_best = max((s for _, s in fused), default=0.0)
         if hits and hits[0]["score"] < orig_best:
             hits[0] = dict(hits[0], score=round(float(orig_best), 4))
-    return hits
+    return _prefer_hall_clock_hits(asked, hits, persona)
 
 
 def _fmt(it, item_idx, recall_src, score, mode):

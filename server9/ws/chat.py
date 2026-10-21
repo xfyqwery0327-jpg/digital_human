@@ -16,7 +16,18 @@ from rag.intent import (
     intent_classifier, sentiment_analyzer, ner_system,
     recommendation_engine, memory_system,
 )
-from llm.persona import hook_generator, ticket_promoter, system_prompt, chitchat_reply
+from llm.persona import system_prompt, chitchat_reply
+from rag.dialogue import (
+    is_foreign_question, FOREIGN_REPLY, note_hall, note_realtime, realtime_reply,
+    suggest_hooks, visit_fact_reply, exhibit_names, titles_from_items, pack_done,
+    HALL_INTENTS,
+)
+from services.local_feed import feed_bundle
+from services.screen_hooks import (
+    is_ticket_booking, booking_reply, ticket_form_event, request_ticket_form,
+    artworks_event, notify_artworks, headline_event, request_headline_image,
+)
+from rag.visit import visit_hint, guard_hall_clock, filter_spoken_sentence
 from persona.runtime import resolve, bind, active, call_bound
 from rag.scope import (
     is_other_exhibition_query, locked_category, clamp_hall_answer,
@@ -73,16 +84,42 @@ async def handle_command(websocket: WebSocket, question: str, session: SessionSt
     await _send_reply_with_audio(websocket, reply, speaker)
     session.add_turn(question, reply, [], None, [], "command")
     persistence.save_session(session)
-    await websocket.send_json({"type": "done", "intent": "command", "refused": False,
-                               "sources": [], "suggestions": [], "sentiment": None})
+    await websocket.send_json(pack_done("command", [], [], False, [], [], None))
 
-async def handle_chitchat(websocket: WebSocket, question: str, session: SessionState, speaker: str):
-    reply = chitchat_reply(question)
+async def handle_ticket_booking(websocket: WebSocket, question: str, session: SessionState,
+                                speaker: str, persona):
+    """预约门票：先让屏幕弹表单，再念一句。接口未到时只留调用位。"""
+    reply = booking_reply()
+    await websocket.send_json(ticket_form_event(
+        question, getattr(session, "session_id", ""), getattr(persona, "id", "")))
+    loop = asyncio.get_running_loop()
+    loop.run_in_executor(
+        None,
+        lambda: request_ticket_form(
+            question, getattr(persona, "id", ""), getattr(session, "session_id", "")))
     await _send_reply_with_audio(websocket, reply, speaker)
+    session.add_turn(question, reply, [], None, [], "ticket_service")
+    persistence.save_session(session)
+    await websocket.send_json(pack_done("ticket_service", [], [], False, [], [], None))
+
+
+async def handle_chitchat(websocket: WebSocket, question: str, session: SessionState, speaker: str,
+                          persona=None):
+    reply = chitchat_reply(question, persona)
+    await _send_reply_with_audio(websocket, reply, speaker)
+    hooks = suggest_hooks("chitchat", session, persona)
     session.add_turn(question, reply, [], None, [], "chitchat")
     persistence.save_session(session)
-    await websocket.send_json({"type": "done", "intent": "chitchat", "refused": False,
-                               "sources": [], "suggestions": [], "sentiment": None})
+    await websocket.send_json(pack_done("chitchat", hooks, [], False, [], [], None))
+
+
+async def _speak_fixed(websocket, question, session, speaker, persona, reply, intent):
+    """固定口播。钩子只放进 done，不送去合成。"""
+    await _send_reply_with_audio(websocket, reply, speaker)
+    hooks = suggest_hooks(intent, session, persona)
+    session.add_turn(question, reply, [], None, [], intent)
+    persistence.save_session(session)
+    await websocket.send_json(pack_done(intent, hooks, [], False, [], [], None))
 
 async def websocket_chat(websocket: WebSocket, persona_id: Optional[str] = None):
     from fastapi import HTTPException
@@ -169,6 +206,17 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                 print(f"⏭ 忽略游客对话（与当前机器人 ask 相同，避免 asr 回声）: {question[:40]}")
                 continue
 
+            if is_ticket_booking(question):
+                print(f"🎫 门票预约，打开填写界面: {question[:40]}")
+                await handle_ticket_booking(websocket, question, session, speaker, persona)
+                continue
+
+            if is_foreign_question(question):
+                print(f"🌐 非中文提问，先说明只用中文: {question[:40]}")
+                await _speak_fixed(websocket, question, session, speaker, persona,
+                                   FOREIGN_REPLY, "chitchat")
+                continue
+
             # 其他展会必须先于意图分流，避免被闲聊/指令绕过
             if is_other_exhibition_query(question):
                 print(f"🚫 其他展会问题，拉回本届: {question[:40]}")
@@ -183,8 +231,7 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                         print(f"⚠️ TTS 失败: {e}")
                 session.add_turn(question, refuse_text_val, [], None, [], "knowledge")
                 persistence.save_session(session)
-                await safe_send({"type": "done", "refused": True, "intent": "knowledge",
-                                 "sources": [], "suggestions": [], "sentiment": None})
+                await safe_send(pack_done("knowledge", [], [], True, [], [], None))
                 continue
 
             # 意图识别移入 executor，不阻塞事件循环
@@ -195,8 +242,37 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                 await handle_command(websocket, question, session, speaker)
                 continue
             elif intent == "chitchat" and intent_classifier.should_route_to("chitchat", raw_score):
-                await handle_chitchat(websocket, question, session, speaker)
+                await handle_chitchat(websocket, question, session, speaker, persona)
                 continue
+            elif intent in ("weather", "news") and intent_classifier.should_route_to(intent, raw_score):
+                note_realtime(session)
+                bundle = {}
+                if session.realtime_streak <= 1:
+                    bundle = await loop.run_in_executor(None, lambda kind=intent: feed_bundle(kind))
+                reply = realtime_reply(session, persona, (bundle or {}).get("text") or "")
+                if intent == "news" and (bundle or {}).get("image_url"):
+                    await safe_send(headline_event(
+                        bundle.get("title") or "", bundle.get("image_url") or "",
+                        bundle.get("link") or "", session_id or "", getattr(persona, "id", "")))
+                    loop.run_in_executor(
+                        None,
+                        lambda b=bundle: request_headline_image(
+                            b.get("title") or "", b.get("image_url") or "",
+                            b.get("link") or "", getattr(persona, "id", ""), session_id or ""))
+                print(f"🌤 实时问题第{session.realtime_streak}轮: {question[:40]}")
+                await _speak_fixed(websocket, question, session, speaker, persona, reply, intent)
+                continue
+
+            fact = visit_fact_reply(question, persona)
+            if fact:
+                note_hall(session)
+                print(f"🎫 参观信息用展厅句子: {question[:40]}")
+                await _speak_fixed(websocket, question, session, speaker, persona, fact, "visit")
+                continue
+
+            route_intent = intent if intent in HALL_INTENTS else "knowledge"
+            if route_intent in HALL_INTENTS:
+                note_hall(session)
 
             sentiment = sentiment_analyzer.analyze(question)
             entities = ner_system.extract_entities(question)
@@ -220,9 +296,8 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                         print(f"⚠️ TTS 失败: {e}")
                 session.add_turn(question, refuse_text_val, [], sentiment, entities, "knowledge")
                 persistence.save_session(session)
-                await safe_send({"type": "done", "refused": True, "intent": "knowledge",
-                                 "sources": [], "suggestions": [],
-                                 "sentiment": sentiment.to_dict()})
+                await safe_send(pack_done("knowledge", [], [], True, [], [],
+                                         sentiment.to_dict()))
                 continue
 
             # 构建上下文
@@ -252,6 +327,7 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                 user_prompt = f"【实体上下文】最近提到: {entity_context}\n\n" + user_prompt
             user_prompt += "\n\n只根据参考资料讲这场展，不要提及其他展览。\n"
             user_prompt += works_answer_hint(question, persona)
+            user_prompt += visit_hint(question, persona)
             user_prompt += "/no_think"
             messages.append({"role": "user", "content": user_prompt})
 
@@ -314,6 +390,7 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                 t0 = time.time()
                 leaked = False
                 first_sent = False
+                clock_state = {}
 
                 while True:
                     if leaked:
@@ -358,6 +435,7 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                                 continue
                             first_sent = True
                         sentence, stop = hall_safe_sentence(sentence)
+                        sentence = filter_spoken_sentence(sentence, question, persona, clock_state)
                         await enqueue_sentence(sentence)
                         if stop:
                             leaked = True
@@ -369,6 +447,7 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                     if tail and not first_sent:
                         tail = strip_identity_opening(tail, persona)
                     tail, stop = hall_safe_sentence(tail)
+                    tail = filter_spoken_sentence(tail, question, persona, clock_state)
                     await enqueue_sentence(tail)
                     if stop:
                         leaked = True
@@ -379,7 +458,10 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                     leaked = True
                     full_answer = refuse_text(persona)
                 else:
-                    full_answer = clamp_hall_answer(cleaned or refuse_text(persona), persona)
+                    full_answer = guard_hall_clock(
+                        question,
+                        clamp_hall_answer(cleaned or refuse_text(persona), persona),
+                        persona)
                 print(f"✅ LLM 回答完成，耗时 {time.time()-t0:.2f}s")
 
             except Exception as e:
@@ -389,25 +471,9 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                 error_text = "抱歉,我现在有点不舒服。"
                 await safe_send({"type": "error", "content": str(e)})
                 await safe_send({"type": "text", "content": error_text})
-                await safe_send({"type": "done", "refused": False, "intent": "knowledge",
-                                 "sources": [], "suggestions": [],
-                                 "sentiment": sentiment.to_dict()})
+                await safe_send(pack_done("knowledge", [], [], False, [], [],
+                                         sentiment.to_dict()))
                 continue
-
-            # 钩子 / 票务只在本届展讲解后追加，越界改口不再加
-            if not leaked:
-                if hook_generator.should_add_hook(session):
-                    hook = hook_generator.select_hook(session)
-                    if hook:
-                        full_answer += " " + hook
-                        await safe_send({"type": "text", "content": " " + hook})
-                        await enqueue_sentence(hook)
-
-                if ticket_promoter.should_promote(question, session):
-                    promo_text = ticket_promoter.get_ticket_info(question)
-                    full_answer += " " + promo_text
-                    await safe_send({"type": "text", "content": " " + promo_text})
-                    await enqueue_sentence(promo_text)
 
             # 等待音频全部发完再收尾
             if worker_task:
@@ -415,7 +481,7 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                 await worker_task
 
             source_ids = [] if leaked else [h["id"] for h in hits]
-            session.add_turn(question, full_answer, source_ids, sentiment, entities, "knowledge")
+            session.add_turn(question, full_answer, source_ids, sentiment, entities, route_intent)
             persistence.save_session(session)
 
             if ENABLE_MEMORY:
@@ -434,9 +500,21 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                     await safe_send({"type": "recommendation", "content": rec_text,
                                      "items": recommendations})
 
-            await safe_send({"type": "done", "refused": leaked, "intent": "knowledge",
-                             "sources": source_ids, "suggestions": recommendations,
-                             "sentiment": sentiment.to_dict()})
+            names = [] if leaked else exhibit_names(
+                full_answer,
+                titles_from_items(rag.active_items(persona)),
+                getattr(persona, "exhibit_aliases", None) or {})
+            if names:
+                await safe_send(artworks_event(
+                    names, session_id, getattr(persona, "id", "")))
+                loop.run_in_executor(
+                    None,
+                    lambda found=names, reply=full_answer: notify_artworks(
+                        found, reply, getattr(persona, "id", ""), session_id or ""))
+            hooks = [] if leaked else suggest_hooks(route_intent, session, persona, names)
+            await safe_send(pack_done(
+                route_intent, hooks, names, leaked, source_ids, recommendations,
+                sentiment.to_dict()))
 
     except WebSocketDisconnect:
         print(f"🔌 WebSocket 断开: {session_id}")
