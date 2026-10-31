@@ -3,7 +3,6 @@
 from __future__ import annotations
 import asyncio
 import json
-import re
 import time
 import uuid
 import threading
@@ -17,7 +16,7 @@ from llm.persona import system_prompt, pick_hello, chitchat_reply
 from rag.intent import intent_classifier
 from persona.registry import registry
 from persona.runtime import resolve, bind, active
-from llm.client import extract_clean_delta, clean_stream_sentence, SENT_END, clean_full_answer, _find_sentence_end, strip_identity_opening
+from llm.client import extract_clean_delta, clean_stream_sentence, SENT_END, clean_full_answer, _find_sentence_end, strip_identity_opening, iter_llm_sse
 from rag import index as rag
 from rag.search import search as search_fn, works_answer_hint
 from tts.cosyvoice import push_sentence_pcm, tts_output_rate
@@ -25,6 +24,7 @@ from tts import cosyvoice as tts
 from tts.engine import tts_engine_name
 from tts.playback import PcmPlayClock
 from tts.planner import UnitPlanner
+from tts.speaktext import split_by_marks
 from ws.hub import tts_fanout, attach_robot_id, accept_websocket
 from ws.session_wire import tts_wire_allowed
 from robot.hub import robot_hub
@@ -350,9 +350,9 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
             print(f"⚠️ 本轮最后一句没有声音 session={session_id[:8]} '{last_item[0][:30]}'")
 
     async def planned_worker(model_ok: bool):
-        """整句出声引擎：推送不等播放，推完立刻合成下一段。
+        """整句出声引擎：按标点切开后逐段合成，推完立刻合成下一段。
 
-        客户端缓冲少时只送一个小句，缓冲够再把后面的小句拼长；Qwen3-TTS 把排着的几段一次 batch。
+        Qwen3-TTS 默认一批只送一句。环境变量把 QWEN_TTS_BATCH 调大时才并行预取。
         """
         nonlocal seq, cancelled, last_pcm_ok, sent_idx
         planner = UnitPlanner(
@@ -523,7 +523,7 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
         elif not enable_llm:
             llm_answer = user_question
             await send_llm_answer(llm_answer)
-            sentences = [s.strip() for s in re.split(f"(?<=[{SENT_END}])", llm_answer) if s.strip()]
+            sentences = split_by_marks(llm_answer)
             for sent in sentences:
                 await send_subtitle(sent)
                 if cancelled:
@@ -577,7 +577,7 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
                             resp = requests.post(LLM_URL, json=llm_payload, timeout=60, stream=True)
                             resp_holder['resp'] = resp
                             resp.raise_for_status()
-                            for line in resp.iter_lines(decode_unicode=True):
+                            for line in iter_llm_sse(resp):
                                 if cancel_ev.is_set():
                                     break
                                 loop.call_soon_threadsafe(sse_queue.put_nowait, line)

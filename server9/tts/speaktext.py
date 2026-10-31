@@ -126,11 +126,11 @@ def _split_punct_keep_decimal(text: str) -> list:
 
 
 def split_by_marks(text: str) -> list:
-    """只在标点或书名号右界断开。《》里面的逗号、句号都不切。
+    """只在标点处断开。书名号本身不切，《》里面的逗号、句号也不切。
 
-    「我画的《睡莲》是晚年最重要的作品。」切成
-    「我画的《睡莲》」和「是晚年最重要的作品。」
-    不按字数从「最重」和「要」中间断开。
+    「我画的《睡莲》是晚年最重要的作品。」整句保留。
+    「是晚年最重要的作品，在吉维尼。」在逗号处切开。
+    不按字数从「最重」和「要」中间断开。小数点两侧都是数字时不切。
     """
     raw = (text or "").strip()
     if not raw:
@@ -138,7 +138,8 @@ def split_by_marks(text: str) -> list:
     parts = []
     buf = []
     depth = 0
-    for ch in raw:
+    n = len(raw)
+    for i, ch in enumerate(raw):
         buf.append(ch)
         if ch == "《":
             depth += 1
@@ -146,17 +147,18 @@ def split_by_marks(text: str) -> list:
         if ch == "》":
             if depth > 0:
                 depth -= 1
-            if depth == 0:
-                piece = "".join(buf).strip()
-                if piece:
-                    parts.append(piece)
-                buf = []
             continue
-        if depth == 0 and ch in "，。！？；、,.!?":
-            piece = "".join(buf).strip()
-            if piece:
-                parts.append(piece)
-            buf = []
+        if depth != 0 or ch not in "，。！？；、,.!?":
+            continue
+        if ch in ".,":
+            prev_d = i > 0 and raw[i - 1].isdigit()
+            next_d = i + 1 < n and raw[i + 1].isdigit()
+            if prev_d and next_d:
+                continue
+        piece = "".join(buf).strip()
+        if piece:
+            parts.append(piece)
+        buf = []
     tail = "".join(buf).strip()
     if tail:
         parts.append(tail)

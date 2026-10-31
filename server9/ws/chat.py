@@ -10,7 +10,7 @@ import requests
 from fastapi import WebSocket, WebSocketDisconnect
 
 from config import *
-from llm.client import extract_clean_delta, clean_stream_sentence, clean_full_answer, SENT_END, _find_sentence_end, strip_identity_opening
+from llm.client import extract_clean_delta, clean_stream_sentence, clean_full_answer, SENT_END, _find_sentence_end, strip_identity_opening, iter_llm_sse
 from session import SessionState, persistence, active_sessions
 from rag.intent import (
     intent_classifier, sentiment_analyzer, ner_system,
@@ -370,7 +370,7 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                     try:
                         resp = requests.post(LLM_URL, json=llm_payload, timeout=60, stream=True)
                         resp.raise_for_status()
-                        for line in resp.iter_lines(decode_unicode=True):
+                        for line in iter_llm_sse(resp):
                             loop.call_soon_threadsafe(sse_queue.put_nowait, line)
                     except Exception:
                         pass

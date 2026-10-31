@@ -147,32 +147,47 @@ def test_coalesce_stops_on_timeout_or_end():
 def test_split_by_marks_keeps_book_title_whole():
     from tts.speaktext import split_by_marks
     assert split_by_marks("我画的《睡莲》是晚年最重要的作品。") == [
-        "我画的《睡莲》",
-        "是晚年最重要的作品。",
+        "我画的《睡莲》是晚年最重要的作品。",
     ]
     assert split_by_marks("《日出·印象》画于勒阿弗尔。") == [
-        "《日出·印象》",
-        "画于勒阿弗尔。",
+        "《日出·印象》画于勒阿弗尔。",
     ]
     assert split_by_marks("看《睡莲，印象》吧。") == [
-        "看《睡莲，印象》",
-        "吧。",
+        "看《睡莲，印象》吧。",
     ]
     assert split_by_marks("是晚年最重要的作品，在吉维尼。") == [
         "是晚年最重要的作品，",
         "在吉维尼。",
     ]
+    assert split_by_marks("身高1.4米，站在池边。") == [
+        "身高1.4米，",
+        "站在池边。",
+    ]
     whole = "我画的《睡莲》是晚年最重要的作品。"
-    assert "最重" not in "".join(p for p in split_by_marks(whole) if "重要" not in p)
+    assert split_by_marks(whole) == [whole]
 
 
-def test_planner_splits_on_title_and_punct_not_char_count():
+def test_sentence_end_ignores_punct_inside_title():
+    from llm.client import _find_sentence_end
+    assert _find_sentence_end("看《睡莲，印象》吧。") == len("看《睡莲，印象》吧。") - 1
+    assert _find_sentence_end("作品，在吉维尼。") == 2
+
+
+def test_planner_splits_on_punct_not_title_or_char_count():
     from tts.planner import UnitPlanner
     p = UnitPlanner(5, split_marks=True)
     backlog = ["我画的《睡莲》是晚年最重要的作品。", "短句。"]
     got = p.take(backlog, ahead_sec=0.0, max_units=6)
-    assert got == ["我画的《睡莲》", "是晚年最重要的作品。", "短句。"]
+    assert got == ["我画的《睡莲》是晚年最重要的作品。", "短句。"]
     assert backlog == []
+    punct = ["是晚年最重要的作品，在吉维尼。"]
+    assert p.take(punct, ahead_sec=30.0, max_units=6) == [
+        "是晚年最重要的作品，", "在吉维尼。",
+    ]
+    sticky = UnitPlanner(40, split_marks=True)
+    sticky.observe(5, 1.25, 0.625)
+    short = ["作品，", "在吉维尼。"]
+    assert sticky.take(short, ahead_sec=30.0, max_units=6) == ["作品，", "在吉维尼。"]
 
 
 def test_wait_first_sentence_until_period():
@@ -398,7 +413,7 @@ def test_visitor_keeps_per_clause_without_merge(monkeypatch):
     assert [s for _i, s in pushed] == ["我是莫奈，", "今天陪你看画，", "先说睡莲。"]
 
 
-def test_visitor_qwen_prefetches_planned_units_as_one_batch(monkeypatch):
+def test_visitor_qwen_speaks_each_punct_clause_alone(monkeypatch):
     text = "我是莫奈，今天陪你看画，先说睡莲，再说日出，最后讲花园，然后去看桥。"
     pushed, prefetched, _frames = _run_visitor_turn(
         monkeypatch, text, merge_chars=8, engine="qwen3", ahead=0.0)
@@ -408,5 +423,4 @@ def test_visitor_qwen_prefetches_planned_units_as_one_batch(monkeypatch):
         "再说日出，", "最后讲花园，", "然后去看桥。",
     ]
     assert "".join(units) == text
-    assert prefetched == [units]
-    assert len(prefetched[0]) == 6
+    assert prefetched == []

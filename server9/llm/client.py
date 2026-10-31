@@ -156,18 +156,40 @@ def extract_clean_delta(full_raw: str, clean_pos: int) -> Tuple[str, int]:
     return clean_text[clean_pos:safe_end], safe_end
 
 def _find_sentence_end(buf: str, chars: str = SENT_END) -> int:
-    earliest = -1
-    for ch in chars:
-        pos = buf.find(ch)
-        if pos != -1 and (earliest == -1 or pos < earliest):
-            earliest = pos
-    return earliest
+    """最早的句读位置。书名号里的标点不算句界。"""
+    depth = 0
+    for i, ch in enumerate(buf or ""):
+        if ch == "《":
+            depth += 1
+            continue
+        if ch == "》":
+            if depth > 0:
+                depth -= 1
+            continue
+        if depth == 0 and ch in chars:
+            return i
+    return -1
 
 
 import json
-from typing import List, Dict
+from typing import List, Dict, Iterator
 import requests
 from config import LLM_URL
+
+
+def iter_llm_sse(resp) -> Iterator[str]:
+    """按 UTF-8 读 llama.cpp 的 SSE 行。
+
+    Content-Type 为 text/event-stream 且没有 charset 时，requests 按 RFC
+    把 text/* 标成 ISO-8859-1。模型吐出的 UTF-8 中文会被拆成拉丁字符和控制符，
+    前端字幕就是菱形、问号。application/json 会按 UTF-8 解，所以另一路 answer 仍是中文。
+    """
+    resp.encoding = "utf-8"
+    for line in resp.iter_lines(decode_unicode=True):
+        if isinstance(line, bytes):
+            line = line.decode("utf-8")
+        yield line
+
 
 def _llm_collect(messages: List[Dict], max_tokens: int = 300) -> str:
     payload = {"messages": messages, "temperature": 0.05,
@@ -176,7 +198,7 @@ def _llm_collect(messages: List[Dict], max_tokens: int = 300) -> str:
     resp.raise_for_status()
     full_raw = ""
     try:
-        for line in resp.iter_lines(decode_unicode=True):
+        for line in iter_llm_sse(resp):
             if not line or not line.startswith("data: "):
                 continue
             chunk = line[6:]

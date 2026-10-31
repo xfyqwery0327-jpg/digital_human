@@ -10,14 +10,13 @@ import array
 import asyncio
 import base64
 import io
-import re
 import sys
 import threading
 import time
 import wave
 from typing import Dict, List
 
-from llm.client import SENT_END, strip_identity_opening
+from llm.client import strip_identity_opening
 from tts import cosyvoice as tts
 from tts.cosyvoice import push_sentence_pcm, pack_tts_utterances, tts_output_rate
 from tts.planner import UnitPlanner
@@ -140,7 +139,9 @@ async def push_robot_asr(query: str, session_id: str, robot_id: str,
 
 
 def split_speak_sentences(text: str) -> List[str]:
-    sentences = [s.strip() for s in re.split(f"(?<=[{SENT_END}])", text or "") if s.strip()]
+    """按标点切开。书名号里的标点不切。"""
+    from tts.speaktext import split_by_marks
+    sentences = split_by_marks(text or "")
     if sentences:
         return sentences
     stripped = (text or "").strip()
@@ -394,8 +395,7 @@ async def push_robot_turn_to_ws(speak_text: str, speaker: str,
                 chunk_sec = len(chunk) / 2.0 / float(sr)
                 await asyncio.sleep(max(0.0, chunk_sec * 0.85))
         elif tts.cosyvoice_model:
-            # 推送不等播放，推完立刻合成下一段。CosyVoice3 / Qwen3-TTS 每次调用都要重算参考音前缀：
-            # Unity 缓冲少时只送一个小句，缓冲够再拼长；Qwen 排着的几段一次 batch。
+            # 推送不等播放，推完立刻合成下一段。Qwen 按标点切句后逐句合成，默认不走小批次。
             # 不要退回整段一次合成：talker 逐帧自回归，150 字要串行跑四五百帧，首句等太久。
             from config import QWEN_TTS_BATCH, QWEN_TTS_SPLIT_CHARS
             loop = asyncio.get_running_loop()
