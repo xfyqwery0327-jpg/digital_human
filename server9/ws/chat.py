@@ -18,12 +18,11 @@ from rag.intent import (
 )
 from llm.persona import system_prompt, chitchat_reply
 from rag.dialogue import (
-    is_foreign_question, FOREIGN_REPLY, note_hall, note_realtime, realtime_reply,
+    is_foreign_question, FOREIGN_REPLY, note_hall, realtime_reply,
     suggest_hooks, visit_fact_reply, exhibit_names, titles_from_items, pack_done,
     HALL_INTENTS, is_noise_question, is_relation_question, is_family_question,
-    family_reply,
+    family_reply, rule_intent,
 )
-from services.local_feed import feed_bundle
 from services.screen_hooks import (
     is_ticket_booking, booking_reply, ticket_form_event, request_ticket_form,
     artworks_event, notify_artworks, headline_event, request_headline_image,
@@ -114,13 +113,21 @@ async def handle_chitchat(websocket: WebSocket, question: str, session: SessionS
     await websocket.send_json(pack_done("chitchat", hooks, [], False, [], [], None))
 
 
-async def _speak_fixed(websocket, question, session, speaker, persona, reply, intent):
-    """固定口播。钩子只放进 done，不送去合成。"""
+async def _speak_fixed(websocket, question, session, speaker, persona, reply, intent, news_card=None):
+    """固定口播。钩子只放进 done，不送去合成。新闻附上列表里的 url 和缩略图。"""
+    from rag.speech_lang import prepare_spoken, reply_lang_of
+    code = reply_lang_of(session)
+    if code != "zh" and reply:
+        loop = asyncio.get_running_loop()
+        reply = await loop.run_in_executor(None, lambda text=reply, lang=code: prepare_spoken(text, lang))
     await _send_reply_with_audio(websocket, reply, speaker)
     hooks = suggest_hooks(intent, session, persona)
     session.add_turn(question, reply, [], None, [], intent)
     persistence.save_session(session)
-    await websocket.send_json(pack_done(intent, hooks, [], False, [], [], None))
+    done = pack_done(intent, hooks, [], False, [], [], None)
+    if news_card:
+        done.update(news_card)
+    await websocket.send_json(done)
 
 async def websocket_chat(websocket: WebSocket, persona_id: Optional[str] = None):
     from fastapi import HTTPException
@@ -212,6 +219,17 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                 await handle_ticket_booking(websocket, question, session, speaker, persona)
                 continue
 
+            from rag.speech_lang import confirm_text, set_reply_lang, split_switch
+            lang_code, lang_rest = split_switch(question)
+            if lang_code:
+                set_reply_lang(session, lang_code)
+                if len(lang_rest) < 2:
+                    print(f"🌐 切换口播语言 {lang_code}: {question[:40]}")
+                    await _speak_fixed(websocket, question, session, speaker, persona,
+                                       confirm_text(lang_code), "chitchat")
+                    continue
+                question = lang_rest
+
             if is_foreign_question(question):
                 print(f"🌐 非中文提问，先说明只用中文: {question[:40]}")
                 await _speak_fixed(websocket, question, session, speaker, persona,
@@ -267,23 +285,34 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
             elif intent == "chitchat" and intent_classifier.should_route_to("chitchat", raw_score):
                 await handle_chitchat(websocket, question, session, speaker, persona)
                 continue
-            elif intent in ("weather", "news") and intent_classifier.should_route_to(intent, raw_score):
-                note_realtime(session)
-                bundle = {}
-                if session.realtime_streak <= 1:
-                    bundle = await loop.run_in_executor(None, lambda kind=intent: feed_bundle(kind))
-                reply = realtime_reply(session, persona, (bundle or {}).get("text") or "")
-                if intent == "news" and (bundle or {}).get("image_url"):
+            elif rule_intent(question, session) in ("weather", "news") or (
+                    intent in ("weather", "news") and intent_classifier.should_route_to(intent, raw_score)):
+                from rag.dialogue import prepare_realtime
+                from services.local_feed import news_card
+                forced = rule_intent(question, session)
+                if forced in ("weather", "news"):
+                    intent = forced
+                turn = await loop.run_in_executor(
+                    None, lambda: prepare_realtime(question, session, persona))
+                if turn:
+                    intent = turn.get("kind") or intent
+                    bundle = turn.get("bundle") or {}
+                    reply = turn.get("reply") or ""
+                else:
+                    bundle = {}
+                    reply = realtime_reply(session, persona, "")
+                card = news_card(bundle) if intent == "news" else {}
+                if intent == "news" and card:
                     await safe_send(headline_event(
-                        bundle.get("title") or "", bundle.get("image_url") or "",
-                        bundle.get("link") or "", session_id or "", getattr(persona, "id", "")))
+                        bundle.get("title") or "", card.get("thumbnail_pic_s") or "",
+                        card.get("url") or "", session_id or "", getattr(persona, "id", "")))
                     loop.run_in_executor(
                         None,
-                        lambda b=bundle: request_headline_image(
-                            b.get("title") or "", b.get("image_url") or "",
-                            b.get("link") or "", getattr(persona, "id", ""), session_id or ""))
+                        lambda b=bundle, c=card: request_headline_image(
+                            b.get("title") or "", c.get("thumbnail_pic_s") or "",
+                            c.get("url") or "", getattr(persona, "id", ""), session_id or ""))
                 print(f"🌤 实时问题第{session.realtime_streak}轮: {question[:40]}")
-                await _speak_fixed(websocket, question, session, speaker, persona, reply, intent)
+                await _speak_fixed(websocket, question, session, speaker, persona, reply, intent, card)
                 continue
 
             fact = visit_fact_reply(question, persona)
@@ -307,6 +336,8 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
             hits = await loop.run_in_executor(None, lambda: search_fn(_q, _tk, _cat, _sess, persona))
 
             threshold = MIN_SCORE_RERANK if rag.HAS_RERANKER else MIN_SCORE_RRF
+            from rag.bobohui import merge_bobohui
+            hits = merge_bobohui(question, hits, threshold)
             if not hits or hits[0]["score"] < threshold:
                 refuse_text_val = refuse_text(persona)
                 await safe_send({"type": "text", "content": refuse_text_val})
@@ -348,9 +379,15 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                 user_prompt = f"【对话历史】\n{history_text}\n" + user_prompt
             if entity_context:
                 user_prompt = f"【实体上下文】最近提到: {entity_context}\n\n" + user_prompt
-            user_prompt += "\n\n只根据参考资料讲这场展，不要提及其他展览。\n"
+            user_prompt += (
+                "\n\n展会只介绍博博会，不要介绍原先的展，也不要报原先的门票价格。"
+                "问到本人作品或经历时只讲事情本身，不要说这场展有我的作品。"
+                "你人已经在博博会现场，就在宽创国际的展厅里。介绍时说我就在这里，不要说在那里，不要说我听说。\n"
+            )
+            from rag.speech_lang import output_rule, reply_lang_of
             user_prompt += works_answer_hint(question, persona)
             user_prompt += visit_hint(question, persona)
+            user_prompt += output_rule(reply_lang_of(session))
             user_prompt += "/no_think"
             messages.append({"role": "user", "content": user_prompt})
 
@@ -382,6 +419,11 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                 worker_task = asyncio.create_task(tts_worker(tts_queue))
 
             async def enqueue_sentence(sent: str):
+                from rag.speech_lang import prepare_spoken, reply_lang_of
+                code = reply_lang_of(session)
+                if code != "zh" and sent:
+                    sent = await loop.run_in_executor(
+                        None, lambda text=sent, lang=code: prepare_spoken(text, lang))
                 if use_tts and sent:
                     await tts_queue.put(sent)
 
@@ -445,7 +487,7 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
 
                     # while 循环切句（一个 delta 可能含多个句末符），入队不等待
                     while True:
-                        pos = _find_sentence_end(sentence_buffer, SENT_END)
+                        pos = _find_sentence_end(sentence_buffer, lang=reply_lang_of(session))
                         if pos == -1:
                             break
                         sentence = clean_stream_sentence(sentence_buffer[:pos + 1].strip())

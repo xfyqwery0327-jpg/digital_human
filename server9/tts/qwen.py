@@ -323,9 +323,11 @@ def _generate(pieces, persona):
     with _lock:
         _reset_talker_cache(_model)
         try:
+            from rag.speech_lang import qwen_language_of
+            langs = [qwen_language_of(p) for p in pieces]
             generated = _model.generate_voice_clone(
                 text=list(pieces) if len(pieces) > 1 else pieces[0],
-                language=["Chinese"] * len(pieces) if len(pieces) > 1 else "Chinese",
+                language=langs if len(pieces) > 1 else langs[0],
                 voice_clone_prompt=prompt,
                 non_streaming_mode=True,
                 max_new_tokens=budget,

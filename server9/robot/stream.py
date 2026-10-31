@@ -171,7 +171,8 @@ async def push_robot_turn_to_ws(speak_text: str, speaker: str,
                                 session_id: str, robot_id: str,
                                 asr_text: str = "", persona_id: str = "",
                                 fixed_wav: str = "",
-                                preserve_text: bool = False) -> Dict:
+                                preserve_text: bool = False,
+                                news_card: dict = None) -> Dict:
     """一轮只推一次。顺序：asr → intention → tts_start → llm_answer → sentence/chunk → tts_end。
     只推 /ws/{persona_id}/tts；旧 /ws/tts 视为 monet。
 
@@ -280,7 +281,7 @@ async def push_robot_turn_to_ws(speak_text: str, speaker: str,
             llm_sent = True
         if kind in ("tts_chunk", "tts_sentence") and not tts_started:
             await _send_intention()
-            last_pushed = await tts_fanout.send(_stamp({
+            rescue = {
                 "type": "tts_start",
                 "session_id": session_id,
                 "format": "pcm",
@@ -288,7 +289,10 @@ async def push_robot_turn_to_ws(speak_text: str, speaker: str,
                 "channels": 1,
                 "sample_width": 2,
                 "text": start_hint,
-            }), persona_id=pid)
+            }
+            if news_card:
+                rescue.update(news_card)
+            last_pushed = await tts_fanout.send(_stamp(rescue), persona_id=pid)
             tts_started = True
             log.info("补发 tts_start 后再推 %s session=%s robot=%s persona=%s",
                      kind, session_id, rid, pid)
@@ -338,7 +342,7 @@ async def push_robot_turn_to_ws(speak_text: str, speaker: str,
     hint = sentences[0] if sentences else (speak_text or "")[:40]
     intention_payload = await _resolve_screen_intention(
         query, speak_text, persona_obj)
-    await fanout({
+    start = {
         "type": "tts_start",
         "session_id": session_id,
         "format": "pcm",
@@ -346,10 +350,16 @@ async def push_robot_turn_to_ws(speak_text: str, speaker: str,
         "channels": 1,
         "sample_width": 2,
         "text": hint,
-    })
+    }
+    if news_card:
+        start.update(news_card)
+    await fanout(start)
     log.info("已推 tts_start session=%s robot=%s persona=%s clients=%s sr=%s hint=%s",
              session_id, rid, pid, last_pushed, sr, hint[:40])
-    await fanout({"type": "llm_answer", "text": speak_text})
+    answer = {"type": "llm_answer", "text": speak_text}
+    if news_card:
+        answer.update(news_card)
+    await fanout(answer)
     log.info("已推 llm_answer session=%s robot=%s persona=%s chars=%s",
              session_id, rid, pid, len(speak_text or ""))
     try:
@@ -589,6 +599,8 @@ async def push_robot_turn_to_ws(speak_text: str, speaker: str,
         "sample_rate": sr,
     }
     end.update(_screen_hooks(asr_text, speak_text, persona_obj, leaked))
+    if news_card:
+        end.update(news_card)
     if seq <= 0:
         end["audio"] = False
         if not skip_reason:

@@ -58,11 +58,12 @@ def test_weather_second_turn_has_no_digits():
     note_realtime(mem)
     second = realtime_reply(mem, persona)
     assert "二十二" not in first and "22" not in first
-    assert "就到这里" in second
+    assert "博博会" in first and "博博会" in second
+    assert "就到这里" not in second
     assert "{" not in first and "reply_text" not in second
     hooks = suggest_hooks("weather", mem, persona)
-    assert len(hooks) == 1
-    assert hooks[0] not in first and hooks[0] not in second
+    assert hooks == ["了解完天气，您还想了解博博会或宽创展台的哪些内容呢？"]
+    assert hooks[0] in first and hooks[0] in second
 
 
 def test_weather_fact_then_back_to_hall():
@@ -72,55 +73,38 @@ def test_weather_fact_then_back_to_hall():
     fact = "上海今天阴，十八到二十四摄氏度。"
     first = realtime_reply(mem, persona, fact)
     assert first.startswith(fact)
-    assert "今天更适合在厅里看光和颜色" in first
+    assert "博博会" in first
     assert "场馆里不播报" not in first
     assert "{" not in first
     note_realtime(mem)
     second = realtime_reply(mem, persona, fact)
-    assert "就到这里" in second
-    assert "十八" not in second
+    assert "博博会" in second
+    assert "十八" in second
     fuhao = _persona("fuhao")
     mem2 = RealtimeMemory()
     note_realtime(mem2)
     pulled = realtime_reply(mem2, fuhao, "贵阳今天有雨，十六到二十摄氏度。")
-    assert "商代" in pulled
+    assert "博博会" in pulled
     assert "睡莲" not in pulled
 
 
 def test_fuhao_and_kumarajiva_hooks_match_their_halls():
-    banned = ("睡莲", "莫奈", "印象派", "日出")
+    banned = ("睡莲", "莫奈", "印象派", "日出", "甲骨", "舍利盒")
     expect = {
-        "fuhao": {
-            "exhibit": "甲骨",
-            "person": "领兵",
-            "visit": "开馆",
-            "chitchat": "甲骨",
-            "weather": "甲骨",
-            "name": "青铜钺",
-        },
-        "kumarajiva": {
-            "exhibit": "舍利盒",
-            "person": "长安",
-            "visit": "在哪里",
-            "chitchat": "译经",
-            "weather": "译经",
-            "name": "舍利盒",
-        },
+        "exhibit": "了解完我的作品",
+        "person": "了解完我的经历",
+        "visit": "了解完展会安排",
+        "chitchat": "了解完我的介绍",
+        "weather": "了解完天气",
+        "news": "了解完新闻",
     }
-    for pid, tokens in expect.items():
+    tail = "您还想了解博博会或宽创展台的哪些内容呢？"
+    for pid in ("fuhao", "kumarajiva", "monet"):
         persona = _persona(pid)
-        for intent, token in tokens.items():
-            if intent == "name":
-                continue
-            hooks = suggest_hooks(intent, RealtimeMemory(), persona)
-            assert hooks
-            assert len(hooks) <= 2
-            assert all(word not in hook for hook in hooks for word in banned)
-            assert any(token in hook for hook in hooks)
-        named = suggest_hooks("exhibit", RealtimeMemory(), persona, [tokens["name"]])
-        assert tokens["name"] in named[0]
-        assert named[0].startswith("想再")
-        assert all(word not in named[0] for word in banned)
+        for intent, head in expect.items():
+            hooks = suggest_hooks(intent, RealtimeMemory(), persona, ["青铜钺"])
+            assert hooks == ["%s，%s" % (head, tail)]
+            assert all(word not in hook_text for hook_text in hooks for word in banned)
 
 
 def test_feed_lines_skip_missing_numbers():
@@ -163,9 +147,11 @@ def test_exhibit_alias_and_title():
 def test_visit_fact_uses_hall_clock():
     persona = _persona("monet")
     text = visit_fact_reply("这个展会几点开门", persona)
-    assert "浪漫与星辰" in text
-    assert "十二月三十一" not in text
+    assert "我就在博博会现场的宽创展厅里" in text and "海南国际会展中心" in text
+    assert "在那里" not in text
+    assert "浪漫与星辰" not in text and "七十八" not in text
     assert visit_fact_reply("睡莲在哪画的", persona) == ""
+    assert "元" not in visit_fact_reply("门票多少钱", persona)
 
 
 def test_fuhao_does_not_recommend_monet():
@@ -208,32 +194,33 @@ def test_v1_chinese_scenes_stay_plain_speech():
     note_realtime(mem)
     weather = realtime_reply(mem, persona, "上海今天晴，二十二到二十八摄氏度。")
     weather_hooks = suggest_hooks("weather", mem, persona)
-    assert "摄氏度" in weather and "今天更适合在厅里看光和颜色" in weather
-    assert len(weather_hooks) == 1 and "睡莲" in weather_hooks[0]
-    assert weather_hooks[0] not in weather and "{" not in weather
+    assert "摄氏度" in weather and "博博会" in weather
+    assert weather_hooks == ["了解完天气，您还想了解博博会或宽创展台的哪些内容呢？"]
+    assert weather.endswith(weather_hooks[0])
+    assert "{" not in weather
 
     mem2 = RealtimeMemory()
     note_realtime(mem2)
-    news = realtime_reply(mem2, persona, "上海这边有一条消息，博物馆新展览开幕。")
+    news = realtime_reply(mem2, persona, "上海这边有一条消息，博物馆新展览开幕。", kind="news")
     news_done = pack_done("news", suggest_hooks("news", mem2, persona), [], False, [], [], None)
-    assert "博物馆" in news and "今天更适合" in news
+    assert "博物馆" in news and "博博会" in news
     assert news_done["lang"] == "zh" and len(news_done["hook_suggest"]) == 1
     assert news_done["exhibit_names"] == []
 
     spoken = "睡莲是我在吉维尼画的，着重表现水面光影。"
     names = exhibit_names(spoken, [], persona.exhibit_aliases)
     exhibit_hooks = suggest_hooks("exhibit", RealtimeMemory(), persona, names)
-    assert "睡莲" in names and len(exhibit_hooks) <= 2
-    assert all(hook not in spoken for hook in exhibit_hooks)
+    assert "睡莲" in names and exhibit_hooks == ["了解完我的作品，您还想了解博博会或宽创展台的哪些内容呢？"]
+    assert "这场展有我的作品" not in spoken
 
     life = "我一生都在捕捉光线的变化。"
     life_hooks = suggest_hooks("person", RealtimeMemory(), persona)
-    assert any("生平" in hook or "鲁昂" in hook for hook in life_hooks)
+    assert life_hooks == ["了解完我的经历，您还想了解博博会或宽创展台的哪些内容呢？"]
     assert all(hook not in life for hook in life_hooks)
 
     hours = visit_fact_reply("这个展会几点开门", persona)
     visit_hooks = suggest_hooks("visit", RealtimeMemory(), persona)
-    assert "浪漫与星辰" in hours and "十二月三十一" not in hours
+    assert "博博会" in hours and "浪漫与星辰" not in hours and "十二月三十一" not in hours
     assert visit_hooks and len(visit_hooks) <= 2
 
     hello_hooks = suggest_hooks("chitchat", RealtimeMemory(), persona)

@@ -5,30 +5,21 @@ import re
 from typing import Dict, Iterable, List, Optional, Tuple
 
 _WEATHER = re.compile(r"天气|气温|下雨|降温|升温|预报")
-_NEWS = re.compile(r"新闻|头条|时事")
+_NEWS = re.compile(r"新闻|头条|时事|播报新闻")
+_NEWS_MORE = re.compile(r"再来一条|再来一则|再报一条|再讲一条|换一条|下一条|另一条|还有一条|还想再来")
+_NEWS_MORE_SOFT = re.compile(r"了解更多|多讲一点|还有呢|还有吗|继续播")
 _BOOK = re.compile(r"《([^》]{1,40})》")
 _FOREIGN_SCRIPT = re.compile(r"[\u3040-\u30ff\u31f0-\u31ff\uac00-\ud7af]")
 _LATIN = re.compile(r"[A-Za-z]")
 _HAN = re.compile(r"[\u4e00-\u9fff]")
 _NORM = re.compile(r"[\s·・•]+")
 
-_REALTIME = {
-    "monet": (
-        "场馆里不播报天气和新闻。今天更适合在厅里看光和颜色。",
-        "天气和新闻就到这里。厅里还有作品可以看。",
-        ["想了解本次展出的睡莲吗？", "要不要看看《日出·印象》？"],
-    ),
-    "fuhao": (
-        "场馆里不播报天气和新闻。今日只讲这一场商代的展。",
-        "这件事就到这里。厅里的甲骨和青铜可以继续看。",
-        ["想看看厅里的甲骨吗？", "要不要听一件青铜？"],
-    ),
-    "kumarajiva": (
-        "场馆里不播报天气和新闻。今日只讲这一场龟兹的展。",
-        "这件事就到这里。厅里的译经和造像可以继续看。",
-        ["想听听译经的事吗？", "要不要看看舍利盒？"],
-    ),
-}
+def _hook_pair():
+    from rag.bobohui import hall_hook
+    return hall_hook("天气"), hall_hook("新闻"), [hall_hook("我的作品")]
+
+
+_REALTIME = {pid: _hook_pair() for pid in ("monet", "fuhao", "kumarajiva")}
 
 FOREIGN_REPLY = "现在只用中文讲解。"
 HALL_INTENTS = ("exhibit", "person", "visit")
@@ -46,6 +37,9 @@ class RealtimeMemory:
         self.realtime_streak = 0
         self.hook_used = set()
         self.last_answer = ""
+        self.news_played = []
+        self.last_realtime_kind = ""
+        self.reply_lang = "zh"
 
     def bump_realtime(self) -> int:
         self.realtime_streak += 1
@@ -72,14 +66,21 @@ _NAME_ALIAS = {
 }
 
 
-def rule_intent(question: str):
-    """天气、新闻走词表。问题里已经点了书名号时，留给展品检索。"""
+def rule_intent(question: str, session=None):
+    """切换语言、天气、新闻走词表。上一条刚播过新闻时，再来一条也算新闻。"""
     text = question or ""
+    from rag.speech_lang import split_switch
+    code, rest = split_switch(text)
+    if code and len(rest) < 2:
+        return "lang_switch"
     if _BOOK.search(text):
         return None
     if _WEATHER.search(text):
         return "weather"
-    if _NEWS.search(text):
+    if _NEWS.search(text) or _NEWS_MORE.search(text):
+        return "news"
+    last = getattr(session, "last_realtime_kind", "") if session is not None else ""
+    if last == "news" and _NEWS_MORE_SOFT.search(text):
         return "news"
     return None
 
@@ -220,18 +221,57 @@ def _return_clause(first: str, again: str) -> str:
     return again or ""
 
 
-def realtime_reply(session, persona, fact: str = "") -> str:
-    """第 1 轮可带一句查到的事实，说完立刻拉回本厅。第 2 轮起只说收敛句。"""
-    first, again, _hooks = _lines(persona)
-    streak = int(getattr(session, "realtime_streak", 1) or 1)
-    if streak >= 2:
-        return again
+def _hall_hook(persona, kind: str = "") -> str:
+    """天气说完问了解完天气，新闻说完问了解完新闻。"""
+    del persona
+    from rag.bobohui import hall_hook
+    topic = "新闻" if kind == "news" else "天气"
+    return hall_hook(topic)
+
+
+def realtime_reply(session, persona, fact: str = "", kind: str = "") -> str:
+    """播完查到的事实，再按刚讲的内容加一句钩子。没查到就只说这句钩子。"""
+    kind = kind or getattr(session, "last_realtime_kind", "") or "weather"
+    hook = _hall_hook(persona, kind)
     fact = (fact or "").strip()
     if not fact:
-        return first
+        return hook
     if fact[-1] not in "。！？":
         fact += "。"
-    return fact + _return_clause(first, again)
+    return fact + hook
+
+
+def remember_news(session, key: str) -> None:
+    if session is None or not key:
+        return
+    played = getattr(session, "news_played", None)
+    if played is None:
+        played = []
+        try:
+            session.news_played = played
+        except Exception:
+            return
+    if key not in played:
+        played.append(key)
+
+
+def prepare_realtime(question: str, session, persona) -> dict:
+    """天气或新闻：取缓存或现查，口播后带回博博会。不是这两类时返回空。"""
+    kind = rule_intent(question, session)
+    if kind not in ("weather", "news"):
+        return {}
+    note_realtime(session)
+    avoid = list(getattr(session, "news_played", None) or [])
+    from services.local_feed import feed_bundle
+    bundle = feed_bundle(kind, question or "", avoid if kind == "news" else None)
+    if kind == "news":
+        remember_news(session, (bundle or {}).get("uniquekey") or "")
+    try:
+        session.last_realtime_kind = kind
+    except Exception:
+        pass
+    reply = realtime_reply(session, persona, (bundle or {}).get("text") or "", kind)
+    return {"kind": kind, "reply": reply, "bundle": bundle or {}}
 
 
 def _named_hooks(persona, names, intent: str) -> List[str]:
@@ -254,65 +294,31 @@ def _named_hooks(persona, names, intent: str) -> List[str]:
 
 
 def suggest_hooks(intent: str, session, persona, names: List[str] = None) -> List[str]:
-    """按钮文案。实时类和寒暄只给 1 条，其余最多 2 条。不写进口播。"""
-    limit = 1 if intent in ("weather", "news", "chitchat") else 2
+    """按钮跟着刚讲的内容走：了解完天气、新闻或我的作品。"""
+    del session, persona, names
     if intent in ("command", "ticket_service"):
         return []
-    _first, _again, realtime_hooks = _lines(persona)
-    hooks = dict(getattr(persona, "hooks", None) or {})
-    if intent in ("weather", "news"):
-        pool = list(realtime_hooks)
-    elif intent == "chitchat":
-        pool = list(hooks.get("opening") or hooks.get("knowledge") or [])
-    elif intent == "exhibit":
-        pool = list(hooks.get("technique") or []) + list(hooks.get("knowledge") or [])
-    elif intent == "person":
-        pool = list(hooks.get("deep") or []) + list(hooks.get("knowledge") or [])
-    elif intent == "visit":
-        pool = list(hooks.get("interactive") or []) + list(hooks.get("opening") or [])
-    else:
-        pool = list(hooks.get("opening") or [])
-    pool = _named_hooks(persona, names, intent) + pool
-    used = getattr(session, "hook_used", None)
-    if used is None:
-        used = set()
-        try:
-            session.hook_used = used
-        except Exception:
-            pass
-    picked = []
-    fresh = [h for h in pool if h and h not in used]
-    if len(fresh) < limit:
-        used.clear()
-        fresh = [h for h in pool if h]
-    for hook in fresh:
-        if hook in picked:
-            continue
-        picked.append(hook)
-        used.add(hook)
-        if len(picked) >= limit:
-            break
-    return picked
+    from rag.bobohui import HOOK_TOPIC, hall_hook
+    return [hall_hook(HOOK_TOPIC.get(intent, "这些"))]
 
 
 def visit_fact_reply(question: str, persona) -> str:
-    """开放时间、票价、地址优先用人设里写好的句子，不够再交给检索。"""
+    """问展会时间和地点只答博博会。原先门票价格不报。问作品不走这里。"""
+    del persona
     q = question or ""
     if _BOOK.search(q):
         return ""
-    info = dict(getattr(persona, "ticket_info", None) or {})
-    if not info:
-        return ""
-    if any(k in q for k in ("多少钱", "票价", "价格")) and any(k in q for k in ("票", "门票")):
-        return (info.get("price") or "").strip()
-    if any(k in q for k in ("学生票", "优惠票", "免票", "免费")):
-        return (info.get("discount") or "").strip()
+    from rag.bobohui import NO_OLD_TICKET, WHEN_WHERE
+    if any(k in q for k in ("多少钱", "票价", "价格", "学生票", "优惠票", "免票", "免费")) and any(
+            k in q for k in ("票", "门票")):
+        return NO_OLD_TICKET
+    if any(k in q for k in ("学生票", "优惠票", "免票")):
+        return NO_OLD_TICKET
     if any(k in q for k in (
             "开放时间", "几点开门", "几点闭", "几点开馆", "闭馆", "停止入馆",
-            "展期", "什么时候开", "什么时候闭")):
-        return (info.get("duration") or "").strip()
-    if any(k in q for k in ("哪里举办", "展览在哪", "展厅在哪", "地址")):
-        return (info.get("location") or "").strip()
+            "展期", "什么时候开", "什么时候闭",
+            "哪里举办", "展览在哪", "展厅在哪", "地址")):
+        return WHEN_WHERE
     return ""
 
 
@@ -320,6 +326,10 @@ def note_hall(session) -> None:
     clear = getattr(session, "clear_realtime", None)
     if clear:
         clear()
+    try:
+        session.last_realtime_kind = ""
+    except Exception:
+        pass
 
 
 def note_realtime(session) -> int:

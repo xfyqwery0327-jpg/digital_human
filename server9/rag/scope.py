@@ -61,10 +61,16 @@ def is_cross_persona_query(question: str, persona: Optional[PersonaConfig] = Non
     return False
 
 
+_THIS_EXPO = re.compile(r"博博会|中国博物馆及相关产品与技术博览会")
+_OTHER_EXPO = re.compile(r"其他|其它|别的|上一届|下一届")
+
+
 def is_other_exhibition_query(question: str, persona: Optional[PersonaConfig] = None) -> bool:
-    """问的是别的展会/别的馆，而不是本厅展品。"""
+    """问的是别的展会/别的馆，而不是本厅展品。本届博博会是现场所在的展会。"""
     q = (question or "").strip()
     if not q:
+        return False
+    if _THIS_EXPO.search(q) and not _OTHER_EXPO.search(q):
         return False
     if is_cross_persona_query(q, persona):
         return True

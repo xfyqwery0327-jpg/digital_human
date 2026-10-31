@@ -167,6 +167,41 @@ def test_split_by_marks_keeps_book_title_whole():
     assert split_by_marks(whole) == [whole]
 
 
+def test_split_follows_each_language():
+    from tts.speaktext import find_sentence_end, split_by_marks
+    assert split_by_marks("I am here. The light moves.", "en") == [
+        "I am here.",
+        "The light moves.",
+    ]
+    assert split_by_marks("It is 1.4 meters. Then I stop.", "en") == [
+        "It is 1.4 meters.",
+        "Then I stop.",
+    ]
+    assert split_by_marks("Mr. Monet paints here.", "en") == ["Mr. Monet paints here."]
+    assert split_by_marks("Hello, the hall is bright.", "en") == [
+        "Hello,",
+        "the hall is bright.",
+    ]
+    assert split_by_marks("私はここにいます。光が動きます。", "ja") == [
+        "私はここにいます。",
+        "光が動きます。",
+    ]
+    assert split_by_marks("光が動き、色が変わります。", "ja") == [
+        "光が動き、",
+        "色が変わります。",
+    ]
+    assert split_by_marks("저는 여기 있습니다. 빛이 움직입니다.", "ko") == [
+        "저는 여기 있습니다.",
+        "빛이 움직입니다.",
+    ]
+    assert split_by_marks("키는 1.4미터입니다. 끝.", "ko") == [
+        "키는 1.4미터입니다.",
+        "끝.",
+    ]
+    assert find_sentence_end("I am here. The light", "en") == len("I am here.") - 1
+    assert find_sentence_end("看《睡莲，印象》吧。", "zh") == len("看《睡莲，印象》吧。") - 1
+
+
 def test_sentence_end_ignores_punct_inside_title():
     from llm.client import _find_sentence_end
     assert _find_sentence_end("看《睡莲，印象》吧。") == len("看《睡莲，印象》吧。") - 1

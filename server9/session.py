@@ -68,6 +68,9 @@ class SessionState:
         self.sentiment_history: List[Sentiment] = []
         self.hook_used = set()
         self.realtime_streak = 0
+        self.news_played = []
+        self.last_realtime_kind = ""
+        self.reply_lang = "zh"
 
     def add_turn(self, question, answer, sources, sentiment=None, entities=None, intent=None):
         turn = ConversationTurn(question=question, answer=answer, sources=sources,
@@ -140,7 +143,10 @@ class SessionState:
                 "recommendation_count": self.recommendation_count,
                 "sentiment_history": [s.to_dict() for s in self.sentiment_history],
                 "hook_used": list(self.hook_used),
-                "realtime_streak": int(self.realtime_streak or 0)}
+                "realtime_streak": int(self.realtime_streak or 0),
+                "news_played": list(self.news_played or []),
+                "last_realtime_kind": self.last_realtime_kind or "",
+                "reply_lang": self.reply_lang or "zh"}
 
     @classmethod
     def from_dict(cls, data: Dict) -> 'SessionState':
@@ -153,6 +159,9 @@ class SessionState:
         session.recommendation_count = data.get("recommendation_count", 0)
         session.hook_used = set(data.get("hook_used", []))
         session.realtime_streak = int(data.get("realtime_streak") or 0)
+        session.news_played = list(data.get("news_played") or [])
+        session.last_realtime_kind = data.get("last_realtime_kind") or ""
+        session.reply_lang = data.get("reply_lang") or "zh"
         for turn_data in data.get("history", []):
             sentiment = Sentiment(**turn_data["sentiment"]) if turn_data.get("sentiment") else None
             entities = [Entity(**e) for e in turn_data.get("entities", [])]

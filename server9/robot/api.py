@@ -31,10 +31,9 @@ from rag.scope import (
 )
 from rag.visit import visit_hint, guard_hall_clock
 from rag.dialogue import (
-    note_realtime, realtime_reply, rule_intent, RealtimeMemory,
+    rule_intent, RealtimeMemory,
     is_noise_question, is_relation_question, is_family_question, family_reply,
 )
-from services.local_feed import feed_bundle
 from services.screen_hooks import (
     is_ticket_booking, booking_reply, ticket_form_event, request_ticket_form,
     headline_event, request_headline_image,
@@ -89,6 +88,8 @@ def _robot_knowledge_turn_locked(question: str, session: SessionState, top_k: in
 
     hits = search(question, top_k, cat, session, persona=persona)
     threshold = MIN_SCORE_RERANK if rag.HAS_RERANKER else MIN_SCORE_RRF
+    from rag.bobohui import merge_bobohui
+    hits = merge_bobohui(question, hits, threshold)
     if hits:
         log.info("检索 Top1 score=%.4f 阈值=%.4f title=%s recall=%s 耗时=%.2fs",
                  hits[0]["score"], threshold, hits[0].get("title", ""),
@@ -124,10 +125,14 @@ def _robot_knowledge_turn_locked(question: str, session: SessionState, top_k: in
         length_rule = "口播尽量短：只说一句，最多两句，直接给结论，不要铺垫、不要举例、不要分点。\n"
         system_extra = "\n\n本次是语音口播，回答尽量短，一句为宜，不要超过两句。"
         max_tokens = ASK_MAX_TOKENS
+    from rag.speech_lang import output_rule, reply_lang_of
     user_content = (
         f"【参考资料】\n{ref}\n\n【问题】{question}\n\n"
         f"{works_answer_hint(question, persona)}"
-        "只根据参考资料讲这场展，不要提及其他展览。\n"
+        "展会只介绍博博会，不要介绍原先的展，也不要报原先的门票价格。"
+        "问到本人作品或经历时只讲事情本身，不要说这场展有我的作品。"
+        "你人已经在博博会现场，就在宽创国际的展厅里。介绍时说我就在这里，不要说在那里，不要说我听说。\n"
+        f"{output_rule(reply_lang_of(session))}"
         f"{visit_hint(question, persona)}"
         f"{length_rule}"
         "/no_think"
@@ -280,6 +285,7 @@ async def _robot_run_turn(request_id: str, query: str, speaker: str,
     sources: List[str] = []
     fixed_wav = None
     preserve_text = False
+    news_fields = {}
     round_no = robot_hub.round
     farewell = is_farewell_query(query)
     mode = normalize_ask_mode(extra.get("mode", 1))
@@ -288,7 +294,23 @@ async def _robot_run_turn(request_id: str, query: str, speaker: str,
              (query or "")[:80], dumps(extra))
 
     try:
-        if farewell:
+        from rag.speech_lang import confirm_text, prepare_spoken, reply_lang_of, set_reply_lang, split_switch
+        lang_code, lang_rest = split_switch(query or "")
+        if lang_code:
+            set_reply_lang(session, lang_code)
+            if len(lang_rest) < 2:
+                speak_text = confirm_text(lang_code)
+                log.info("ask 切换口播语言 %s persona=%s", lang_code, persona_id)
+                round_no = await robot_hub.bump_round()
+                if session:
+                    session.add_turn(query, speak_text, [], intent="lang_switch")
+                    persistence.save_session(session)
+                query = ""
+            else:
+                query = lang_rest
+        if query == "" and lang_code:
+            pass
+        elif farewell:
             speak_text = pick_bye()
             if script_leaves_hall(speak_text):
                 speak_text = (active().bye_texts or ["今日就讲到这里。再见。"])[0]
@@ -310,26 +332,29 @@ async def _robot_run_turn(request_id: str, query: str, speaker: str,
             if session:
                 session.add_turn(query, speak_text, [], intent="ticket_service")
                 persistence.save_session(session)
-        elif rule_intent(query) in ("weather", "news"):
-            kind = rule_intent(query)
+        elif rule_intent(query, session) in ("weather", "news"):
+            from rag.dialogue import prepare_realtime
+            from services.local_feed import news_card
             persona = active()
             state = session if session is not None else RealtimeMemory()
-            note_realtime(state)
-            bundle = {}
-            if state.realtime_streak <= 1:
-                bundle = await loop.run_in_executor(None, lambda k=kind: feed_bundle(k))
-            if kind == "news" and (bundle or {}).get("image_url"):
+            turn = await loop.run_in_executor(
+                None, lambda: prepare_realtime(query, state, persona))
+            kind = turn.get("kind") or "news"
+            bundle = turn.get("bundle") or {}
+            news_fields = news_card(bundle) if kind == "news" else {}
+            if kind == "news" and news_fields:
                 from ws.hub import tts_fanout
                 await tts_fanout.send(headline_event(
-                    bundle.get("title") or "", bundle.get("image_url") or "",
-                    bundle.get("link") or "", session_id or "", persona_id),
+                    bundle.get("title") or "", news_fields.get("thumbnail_pic_s") or "",
+                    news_fields.get("url") or "", session_id or "", persona_id),
                     persona_id=persona_id)
                 loop.run_in_executor(
                     None,
-                    lambda b=bundle: request_headline_image(
-                        b.get("title") or "", b.get("image_url") or "",
-                        b.get("link") or "", persona_id, session_id or ""))
-            speak_text = realtime_reply(state, persona, (bundle or {}).get("text") or "")
+                    lambda b=bundle, c=news_fields: request_headline_image(
+                        b.get("title") or "", c.get("thumbnail_pic_s") or "",
+                        c.get("url") or "", persona_id, session_id or ""))
+            speak_text = turn.get("reply") or ""
+            preserve_text = True
             log.info("ask 实时问题第%s轮 persona=%s kind=%s", state.realtime_streak, persona_id, kind)
             round_no = await robot_hub.bump_round()
             if session:
@@ -388,6 +413,10 @@ async def _robot_run_turn(request_id: str, query: str, speaker: str,
         audio_b64 = ""
         play_duration = 0.0
         ws_pushed = 0
+        spoken_code = reply_lang_of(session)
+        if speak_text and spoken_code != "zh":
+            speak_text = await loop.run_in_executor(
+                None, lambda text=speak_text, lang=spoken_code: prepare_spoken(text, lang))
         if not speak_text:
             log.warning("本轮无播报文本 request_id=%s persona=%s", request_id, persona_id)
         else:
@@ -397,7 +426,8 @@ async def _robot_run_turn(request_id: str, query: str, speaker: str,
                 speak_text, speaker, session_id, robot_id or "",
                 asr_text=query or "", persona_id=persona_id,
                 fixed_wav=str(fixed_wav) if fixed_wav else "",
-                preserve_text=preserve_text)
+                preserve_text=preserve_text,
+                news_card=news_fields)
             play_duration = float(stream_result.get("play_duration") or 0.0)
             ws_pushed = int(stream_result.get("ws_pushed") or 0)
             wav_bytes = stream_result.get("wav_bytes") or b""

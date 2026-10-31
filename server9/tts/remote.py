@@ -93,6 +93,19 @@ def speaker_id_of(persona, speaker: str = "") -> str:
     return speaker or "monet"
 
 
+def tts_payload(text: str, speaker_id: str = "monet") -> dict:
+    """qwen-tts-service 的请求体。language 用 Chinese / English / Japanese / Korean。"""
+    from rag.speech_lang import qwen_language_of
+    sid = (speaker_id or "").strip() or "monet"
+    return {
+        "text": text,
+        "speaker_id": sid,
+        "format": "pcm",
+        "stream": True,
+        "language": qwen_language_of(text),
+    }
+
+
 def iter_pcm(text: str, speaker_id: str, cancel_ev=None, timeout: float = 90, base: str = "",
               xvec_only=None, prefill=None):
     """边收边吐 (pcm_chunk, sample_rate)，chunk 长度保证是偶数字节。
@@ -103,8 +116,7 @@ def iter_pcm(text: str, speaker_id: str, cancel_ev=None, timeout: float = 90, ba
     """
     import requests
     url = (base or remote_base()).rstrip("/") + "/v1/tts"
-    sid = (speaker_id or "").strip() or "monet"
-    body = {"text": text, "speaker_id": sid, "format": "pcm", "stream": True}
+    body = tts_payload(text, speaker_id)
     if xvec_only is not None:
         body["xvec_only"] = bool(xvec_only)
     if prefill is not None:

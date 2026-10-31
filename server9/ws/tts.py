@@ -31,12 +31,11 @@ from robot.hub import robot_hub
 from rag.scope import is_other_exhibition_query, clamp_hall_answer, hall_safe_sentence, locked_category, refuse_text
 from rag.visit import visit_hint, guard_hall_clock, filter_spoken_sentence
 from rag.dialogue import (
-    is_foreign_question, FOREIGN_REPLY, note_hall, note_realtime, realtime_reply,
+    is_foreign_question, FOREIGN_REPLY, note_hall,
     rule_intent, is_noise_question, is_relation_question, is_family_question, family_reply,
     suggest_hooks, visit_fact_reply, exhibit_names, titles_from_items, HALL_INTENTS,
     RealtimeMemory, intention_event, button_screen_intent,
 )
-from services.local_feed import feed_bundle
 from services.screen_hooks import (
     is_ticket_booking, booking_reply, ticket_form_event, request_ticket_form,
     artworks_event, notify_artworks, headline_event, request_headline_image,
@@ -225,21 +224,42 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
             print(f"🎯 屏幕意图: {msg.get('intentionType')} "
                   f"target={msg.get('targetName') or '-'} session={session_id[:8]}")
             await emit(event)
-            await emit({"type": "tts_start", "session_id": session_id,
-                        "format": "pcm", "sample_rate": tts_output_rate(),
-                        "channels": 1, "sample_width": 2, "text": text_hint})
+            start = {"type": "tts_start", "session_id": session_id,
+                     "format": "pcm", "sample_rate": tts_output_rate(),
+                     "channels": 1, "sample_width": 2, "text": text_hint}
+            start.update(control_box.get("news_card") or {})
+            await emit(start)
 
     async def gated_send(obj: dict):
         if obj.get("type") in ("tts_chunk", "tts_sentence") and not started:
             await ensure_started(obj.get("text") or "")
         await emit(obj)
 
+    _spoken_cache = {}
+
+    async def localize(text: str) -> str:
+        from rag.speech_lang import prepare_spoken, reply_lang_of
+        raw = (text or "").strip()
+        code = reply_lang_of(dialogue_state)
+        if not raw or code == "zh":
+            return raw
+        key = (code, raw)
+        hit = _spoken_cache.get(key)
+        if hit:
+            return hit
+        out = await loop.run_in_executor(None, lambda: prepare_spoken(raw, code))
+        _spoken_cache[key] = out
+        return out
+
     async def send_llm_answer(text: str):
+        text = await localize(text)
         if text:
             dialogue_state.last_answer = text
             control_box["reply"] = text
         await ensure_started(text)
-        await emit({"type": "llm_answer", "session_id": session_id, "text": text})
+        answer = {"type": "llm_answer", "session_id": session_id, "text": text}
+        answer.update(control_box.get("news_card") or {})
+        await emit(answer)
 
     async def _emit_tts_end():
         """游客被机器人接管时不发 tts_end，一轮 ask 只允许 robot stream 发一次 end。
@@ -267,6 +287,7 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
                "lang": "zh",
                "hook_suggest": list(control_box.get("hook_suggest") or []),
                "exhibit_names": list(control_box.get("exhibit_names") or [])}
+        end.update(control_box.get("news_card") or {})
         if seq <= 0:
             end["audio"] = False
             if audio_skip_reason:
@@ -326,7 +347,7 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
     async def send_subtitle(sent: str):
         """标点即切、立刻入队。首句和尾句都要单独合成，禁止粘包截尾。"""
         nonlocal pending, pending_idx, first_clause
-        sent = (sent or "").strip()
+        sent = await localize(sent)
         if not sent:
             return
         if planned:
@@ -625,8 +646,23 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
     audio_task = asyncio.create_task(audio_worker())
 
     try:
+        from rag.speech_lang import confirm_text, set_reply_lang, split_switch
+        lang_code, lang_rest = split_switch(user_question or "")
+        lang_only = False
+        if lang_code:
+            set_reply_lang(dialogue_state, lang_code)
+            if len(lang_rest) < 2:
+                lang_only = True
+            else:
+                user_question = lang_rest
         button_kind = button_screen_intent(user_question)
-        if button_kind:
+        if lang_only:
+            llm_answer = confirm_text(lang_code)
+            print(f"🌐 切换口播语言 {lang_code}: {user_question[:40]}")
+            _remember("chitchat", llm_answer)
+            await send_llm_answer(llm_answer)
+            await send_subtitle(llm_answer)
+        elif button_kind:
             llm_answer = (user_question or "").strip()
             mapped = {"exhibit": "exhibit", "reserve": "ticket_service", "guide": "visit"}[button_kind]
             control_box["classified_intent"] = mapped
@@ -654,22 +690,24 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
             _remember("ticket_service", llm_answer)
             await send_llm_answer(llm_answer)
             await send_subtitle(llm_answer)
-        elif rule_intent(user_question) in ("weather", "news"):
-            kind = rule_intent(user_question)
-            note_realtime(dialogue_state)
-            bundle = {}
-            if dialogue_state.realtime_streak <= 1:
-                bundle = await loop.run_in_executor(None, lambda k=kind: feed_bundle(k))
-            if kind == "news" and (bundle or {}).get("image_url"):
+        elif rule_intent(user_question, dialogue_state) in ("weather", "news"):
+            from rag.dialogue import prepare_realtime
+            from services.local_feed import news_card
+            turn = await loop.run_in_executor(
+                None, lambda: prepare_realtime(user_question, dialogue_state, persona))
+            kind = turn.get("kind") or "news"
+            bundle = turn.get("bundle") or {}
+            control_box["news_card"] = news_card(bundle) if kind == "news" else {}
+            if kind == "news" and (bundle.get("thumbnail_pic_s") or bundle.get("url")):
                 await emit(headline_event(
-                    bundle.get("title") or "", bundle.get("image_url") or "",
-                    bundle.get("link") or "", session_id, getattr(persona, "id", "")))
+                    bundle.get("title") or "", bundle.get("thumbnail_pic_s") or "",
+                    bundle.get("url") or "", session_id, getattr(persona, "id", "")))
                 loop.run_in_executor(
                     None,
                     lambda b=bundle: request_headline_image(
-                        b.get("title") or "", b.get("image_url") or "",
-                        b.get("link") or "", getattr(persona, "id", ""), session_id))
-            llm_answer = realtime_reply(dialogue_state, persona, (bundle or {}).get("text") or "")
+                        b.get("title") or "", b.get("thumbnail_pic_s") or "",
+                        b.get("url") or "", getattr(persona, "id", ""), session_id))
+            llm_answer = turn.get("reply") or ""
             print(f"🌤 实时问题第{dialogue_state.realtime_streak}轮: {user_question[:40]}")
             _remember(kind, llm_answer)
             await send_llm_answer(llm_answer)
@@ -735,6 +773,8 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
                 hits = await loop.run_in_executor(
                     None, lambda: search_fn(user_question, 2, locked_category(), None, active()))
                 threshold = MIN_SCORE_RERANK if rag.HAS_RERANKER else MIN_SCORE_RRF
+                from rag.bobohui import merge_bobohui
+                hits = merge_bobohui(user_question, hits, threshold)
 
                 if hits:
                     print(f"🔍 Top1 分数: {hits[0]['score']} (阈值 {threshold}) | "
@@ -751,11 +791,15 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
                 else:
                     contexts = [h["text"][:COMPRESS_MAX] for h in hits]
                     ref = "\n".join(f"- {c}" for c in contexts)
+                    from rag.speech_lang import output_rule, reply_lang_of
                     user_content = (
                         f"【参考资料】\n{ref}\n\n【问题】{user_question}\n\n"
                         f"{works_answer_hint(user_question, persona)}"
                         f"{visit_hint(user_question, persona)}"
-                        "只根据参考资料讲这场展，不要提及其他展览。\n/no_think"
+                        "展会只介绍博博会，不要介绍原先的展，也不要报原先的门票价格。"
+                        "问到本人作品或经历时只讲事情本身，不要说这场展有我的作品。"
+                        "你人已经在博博会现场，就在宽创国际的展厅里。介绍时说我就在这里，不要说在那里，不要说我听说。\n"
+                        f"{output_rule(reply_lang_of(dialogue_state))}/no_think"
                     )
                     llm_payload = {"messages": [{"role": "system", "content": system_prompt()},
                                                 {"role": "user", "content": user_content}],
@@ -841,7 +885,7 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
                         buf += new_content
 
                         while True:
-                            pos = _find_sentence_end(buf, SENT_END)
+                            pos = _find_sentence_end(buf, lang=reply_lang_of(dialogue_state))
                             if pos == -1:
                                 break
                             sent = buf[:pos + 1]

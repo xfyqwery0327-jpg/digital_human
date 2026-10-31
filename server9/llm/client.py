@@ -155,8 +155,11 @@ def extract_clean_delta(full_raw: str, clean_pos: int) -> Tuple[str, int]:
         return "", clean_pos
     return clean_text[clean_pos:safe_end], safe_end
 
-def _find_sentence_end(buf: str, chars: str = SENT_END) -> int:
-    """最早的句读位置。书名号里的标点不算句界。"""
+def _find_sentence_end(buf: str, chars: str = SENT_END, lang: str = "") -> int:
+    """最早的句读位置。书名号里的标点不算句界。lang 为空时仍按传入的符号表。"""
+    if lang:
+        from tts.speaktext import find_sentence_end
+        return find_sentence_end(buf, lang)
     depth = 0
     for i, ch in enumerate(buf or ""):
         if ch == "《":

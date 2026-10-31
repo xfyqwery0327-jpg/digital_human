@@ -43,7 +43,8 @@ def test_giverny_painting_stays_but_hours_do_not():
     assert leaks_foreign_schedule(leaked, MONET)
     fixed = guard_hall_clock("展览什么时候开门", leaked, MONET)
     assert fixed == CANONICAL_HOURS
-    assert "浪漫与星辰" in fixed
+    assert "博博会" in fixed
+    assert "浪漫与星辰" not in fixed
     assert "吉维尼" not in fixed
 
     mixed = "睡莲画的是水面的光。吉维尼花园每天九点开放。"
@@ -58,7 +59,8 @@ def test_spoken_filter_replaces_visit_once():
         "吉维尼花园的展期到十二月三十一日。", "几点开门", MONET, state)
     second = filter_spoken_sentence(
         "印象派特展在二楼西侧。", "几点开门", MONET, state)
-    assert "浪漫与星辰" in first
+    assert "博博会" in first
+    assert "浪漫与星辰" not in first
     assert second == ""
     assert filter_spoken_sentence("我在吉维尼画睡莲。", "介绍睡莲", MONET, {}) == "我在吉维尼画睡莲。"
     assert not leaks_foreign_schedule("印象派特展展期到十二月。", FUHAO)

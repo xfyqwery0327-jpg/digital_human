@@ -97,6 +97,64 @@ PUNCT_SPLIT = r"[，。！？；、,.!?]"
 _STRONG_END = "。！？；.!?"
 
 
+# 中文用全角句读。英语、韩语用半角。日语用句号和顿号，不把英文句点当句界。
+_MARKS = {
+    "zh": "。！？；，、",
+    "en": ".!?;,",
+    "ja": "。！？、",
+    "ko": ".!?,",
+}
+_ABBREV = re.compile(
+    r"(?:Mr|Mrs|Ms|Dr|Prof|St|Jr|Sr|No|vs|etc|U\.S|U\.K|a\.m|p\.m)\.$",
+    re.I,
+)
+
+
+def sentence_marks(lang: str = "zh") -> str:
+    return _MARKS.get(lang or "zh", _MARKS["zh"])
+
+
+def is_sentence_break(text: str, index: int, lang: str = "zh") -> bool:
+    """这个位置是不是该国的句读。小数、英文缩写和省略号不当句界。"""
+    raw = text or ""
+    if index < 0 or index >= len(raw):
+        return False
+    ch = raw[index]
+    if ch not in sentence_marks(lang):
+        return False
+    if ch in ".,":
+        prev_d = index > 0 and raw[index - 1].isdigit()
+        next_d = index + 1 < len(raw) and raw[index + 1].isdigit()
+        if prev_d and next_d:
+            return False
+    if ch == "." and index + 1 < len(raw) and raw[index + 1] == ".":
+        return False
+    if (lang or "zh") == "en" and ch == ".":
+        if _ABBREV.search(raw[max(0, index - 8):index + 1]):
+            return False
+        if index > 0 and raw[index - 1].isupper() and (index == 1 or not raw[index - 2].isalpha()):
+            nxt = raw[index + 1] if index + 1 < len(raw) else ""
+            if nxt in ("", " "):
+                return False
+    return True
+
+
+def find_sentence_end(buf: str, lang: str = "zh") -> int:
+    """最早的句读位置。书名号里的标点不算句界。"""
+    depth = 0
+    for i, ch in enumerate(buf or ""):
+        if ch == "《":
+            depth += 1
+            continue
+        if ch == "》":
+            if depth > 0:
+                depth -= 1
+            continue
+        if depth == 0 and is_sentence_break(buf, i, lang):
+            return i
+    return -1
+
+
 def _split_punct_keep_decimal(text: str) -> list:
     """按句读切开，但保留 1.4 这类小数点，禁止切成「1.」+「4米」。"""
     parts = []
@@ -125,12 +183,11 @@ def _split_punct_keep_decimal(text: str) -> list:
     return parts
 
 
-def split_by_marks(text: str) -> list:
-    """只在标点处断开。书名号本身不切，《》里面的逗号、句号也不切。
+def split_by_marks(text: str, lang: str = "zh") -> list:
+    """只在该国标点处断开。书名号里面不切，小数和英文缩写不切。
 
+    中文用。！？；，、。英语、韩语用 .!?,。日语用。！？、。
     「我画的《睡莲》是晚年最重要的作品。」整句保留。
-    「是晚年最重要的作品，在吉维尼。」在逗号处切开。
-    不按字数从「最重」和「要」中间断开。小数点两侧都是数字时不切。
     """
     raw = (text or "").strip()
     if not raw:
@@ -138,7 +195,6 @@ def split_by_marks(text: str) -> list:
     parts = []
     buf = []
     depth = 0
-    n = len(raw)
     for i, ch in enumerate(raw):
         buf.append(ch)
         if ch == "《":
@@ -148,13 +204,8 @@ def split_by_marks(text: str) -> list:
             if depth > 0:
                 depth -= 1
             continue
-        if depth != 0 or ch not in "，。！？；、,.!?":
+        if depth != 0 or not is_sentence_break(raw, i, lang):
             continue
-        if ch in ".,":
-            prev_d = i > 0 and raw[i - 1].isdigit()
-            next_d = i + 1 < n and raw[i + 1].isdigit()
-            if prev_d and next_d:
-                continue
         piece = "".join(buf).strip()
         if piece:
             parts.append(piece)

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""本场展是「浪漫与星辰」。开放时间以这份资料为准，不采用吉维尼或印象派特展的时间。"""
+"""展会只介绍博博会。不把吉维尼或原先展的时间、票价说成现场安排。"""
 from __future__ import annotations
 import re
 
@@ -15,18 +15,14 @@ _FAKE_LINE = re.compile(
 _SENT = re.compile(r"[^。！？]+[。！？]?")
 
 CANONICAL_HOURS = (
-    "这场展览是浪漫与星辰。"
-    "从二零二六年七月十日至十月十日。"
-    "每天九点到十八点开放，周六到二十一点。"
-    "平日十七点停止入馆，周六二十点停止入馆。"
-    "周一闭馆，法定节假日除外。"
-    "地点在贵州省博物馆负一楼六号厅。"
+    "我就在博博会现场的宽创展厅里。"
+    "第十一届博博会定于二零二六年十一月十三日至十六日，在海南国际会展中心举办。"
+    "原先的门票价格不介绍。"
 )
 
 _VISIT_HINT = (
-    "这个问题在问本场展览「浪漫与星辰」的开放时间、票价或地址。"
-    "只许使用资料里浪漫与星辰的句子。"
-    "不要把吉维尼、法国花园或印象派特展的时间说成本场展的时间。\n"
+    "这个问题在问展会时间或地点。只介绍第十一届博博会，不要介绍原先的展，也不要报原先的门票价格。"
+    "不要把吉维尼或别的馆的开放时间说成博博会的时间。\n"
 )
 
 
@@ -39,7 +35,8 @@ def is_visit_query(question: str) -> bool:
 
 
 def visit_hint(question: str, persona=None) -> str:
-    if _monet(persona) and is_visit_query(question):
+    del persona
+    if is_visit_query(question):
         return _VISIT_HINT
     return ""
 
@@ -60,7 +57,7 @@ def _sentences(text: str):
 
 
 def guard_hall_clock(question: str, answer: str, persona=None) -> str:
-    """问时间、票价、地址时，整段改回浪漫与星辰。讲画时只删掉串进来的展期句。"""
+    """问时间、票价、地址时，整段改回博博会。讲画时只删掉串进来的展期句。"""
     if not _monet(persona):
         return answer or ""
     parts = _sentences(answer)
@@ -71,7 +68,7 @@ def guard_hall_clock(question: str, answer: str, persona=None) -> str:
     kept = [p for p in parts if not leaks_foreign_schedule(p, persona)]
     if kept:
         return "".join(kept)
-    return "开放时间以浪漫与星辰这场展为准。"
+    return CANONICAL_HOURS
 
 
 def filter_spoken_sentence(sentence: str, question: str, persona=None,

@@ -153,7 +153,7 @@ def notify_artworks(names: List[str], reply: str = "", persona_id: str = "",
 
 def headline_event(title: str, image_url: str, link: str = "",
                    session_id: str = "", persona_id: str = "") -> dict:
-    """前端展示头条原文图。image_url 指向 jpg，不送进语音。"""
+    """前端展示头条图。url 和 thumbnail_pic_s 用列表接口的字段名。"""
     return {
         "type": "headline",
         "action": "show",
@@ -163,6 +163,8 @@ def headline_event(title: str, image_url: str, link: str = "",
         "title": title or "",
         "image_url": image_url or "",
         "link": link or "",
+        "url": link or "",
+        "thumbnail_pic_s": image_url or "",
     }
 
 

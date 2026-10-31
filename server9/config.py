@@ -285,6 +285,13 @@ INTENT_CONFIDENCE_THRESHOLD = {
     "visit": 0.0,
 }
 
+# 聚合数据「新闻头条」。key 可用环境变量 JUHE_NEWS_KEY 覆盖。
+JUHE_NEWS_KEY = os.environ.get("JUHE_NEWS_KEY", "b9d211093a47aa17b4f57a20e136b602")
+JUHE_NEWS_LIST_URL = os.environ.get("JUHE_NEWS_LIST_URL", "https://v.juhe.cn/toutiao/index")
+JUHE_NEWS_CONTENT_URL = os.environ.get("JUHE_NEWS_CONTENT_URL", "https://v.juhe.cn/toutiao/content")
+# 问天气没点地名时用这座城市。现场在海口。
+DEFAULT_WEATHER_CITY = os.environ.get("REALTIME_CITY", "海口") or "海口"
+
 # 机器人互动（可用环境变量覆盖，便于 Windows 现场改 IP 而不改代码）
 ROBOT_MAX_ROUNDS = int(os.environ.get("ROBOT_MAX_ROUNDS", "3"))
 ROBOT_IDLE_TIMEOUT = int(os.environ.get("ROBOT_IDLE_TIMEOUT", "120"))
