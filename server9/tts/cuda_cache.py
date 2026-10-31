@@ -30,8 +30,20 @@ def _reset_qwen_talker() -> None:
 
 
 def release_cuda_cache(reason: str = "", tight: bool = False) -> None:
-    """tight=False：任务结束，有空闲缓存就还。tight=True：只在整卡快满时还。"""
+    """tight=False：任务结束，有空闲缓存就还。tight=True：只在整卡快满时还。
+
+    句与句之间走 tight。显存还宽裕时直接返回，避免每句都 gc 把下一次 generate 拖住。
+    """
     import gc
+    if tight:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                free_b, _total = torch.cuda.mem_get_info()
+                if free_b >= _TIGHT_FREE_BYTES:
+                    return
+        except Exception:
+            return
     gc.collect()
     _reset_qwen_talker()
     try:

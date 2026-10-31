@@ -2,7 +2,7 @@
 """游客讲解的控制通道：意图短句、按钮钩子、展品名。口播里不放这些字段。"""
 from __future__ import annotations
 import re
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional, Tuple
 
 _WEATHER = re.compile(r"天气|气温|下雨|降温|升温|预报")
 _NEWS = re.compile(r"新闻|头条|时事")
@@ -55,6 +55,23 @@ class RealtimeMemory:
         self.realtime_streak = 0
 
 
+_NOISE = re.compile(r"^[0-9零一二三四五六七八九十两〇○]+[啊呀呢吧吗]?$")
+_RELATION = re.compile(r"什么关系|怎么认识|如何认识|怎样认识|咋认识")
+_SPOUSE = re.compile(r"老婆|妻子|夫人|爱人")
+_CHILD = re.compile(r"孩子|儿子|女儿")
+_SKIP_FAMILY = re.compile(
+    r"？|吗|何时|有几个|是谁|是什么|请介绍|如何|请说明|请根据|值得关注|"
+    r"《|欧希德|凡尔纳|费加罗|谢鲁班|垂钓|去世|死于|病情|卧床|癌"
+)
+_NAME_ALIAS = {
+    "卡米尔": "卡美尔",
+    "卡米耶": "卡美尔",
+    "迈克尔": "米契尔",
+    "米歇尔": "米契尔",
+    "让": "简",
+}
+
+
 def rule_intent(question: str):
     """天气、新闻走词表。问题里已经点了书名号时，留给展品检索。"""
     text = question or ""
@@ -65,6 +82,117 @@ def rule_intent(question: str):
     if _NEWS.search(text):
         return "news"
     return None
+
+
+def is_noise_question(question: str) -> bool:
+    """单个字或纯数字，没有可检索的问题。"""
+    text = re.sub(r"[\s，。！？、…,.!?]", "", question or "")
+    if not text:
+        return False
+    if len(text) <= 1:
+        return True
+    return bool(_NOISE.fullmatch(text))
+
+
+def is_relation_question(question: str) -> bool:
+    """问和某人什么关系、怎么认识。点了书名号的仍交给展品检索。"""
+    text = question or ""
+    if _BOOK.search(text):
+        return False
+    return bool(_RELATION.search(text))
+
+
+def is_family_question(question: str) -> bool:
+    """问孩子或配偶。点了书名号的仍交给展品检索。"""
+    text = question or ""
+    if _BOOK.search(text):
+        return False
+    return bool(_SPOUSE.search(text) or _CHILD.search(text))
+
+
+def _family_name(raw: str) -> str:
+    name = re.sub(r"（[^）]*）|\([^)]*\)", "", raw or "")
+    name = name.strip("，、 ")
+    return _NAME_ALIAS.get(name, name)
+
+
+def _family_sentences(blob: str):
+    parts = re.split(r"[\n。！？]", blob or "")
+    out = []
+    for part in parts:
+        sent = re.sub(r"《[^》]*》", "", part or "")
+        sent = re.sub(r"\s+", "", sent)
+        if len(sent) < 4 or _SKIP_FAMILY.search(sent):
+            continue
+        out.append(sent)
+    return out
+
+
+def _persona_blobs(persona):
+    from rag import index as rag
+    bundle = rag.bundle_for(persona) if persona is not None else None
+    if not bundle:
+        return []
+    return [{"text": it.get("text") or ""} for it in bundle.get("items") or []]
+
+
+def family_reply(question: str, hits=None, persona=None) -> str:
+    """只根据资料里的结婚对象和子女名字开口。问句、病故和其他人的家事不念。"""
+    if hits is None:
+        hits = _persona_blobs(persona)
+    blob = "\n".join((h.get("text") or "") for h in hits or [])
+    parts = _family_sentences(blob)
+    ask = question or ""
+    lines = []
+    if _SPOUSE.search(ask):
+        names = []
+        for sent in parts:
+            if "结婚" not in sent:
+                continue
+            for matched in re.finditer(r"(?:与|和)([\u4e00-\u9fff]{2,4})(?:在[\u4e00-\u9fff0-9]{0,12})?结婚", sent):
+                name = _family_name(matched.group(1))
+                if name in {"莫奈", "妻子", "夫人"} or name in names:
+                    continue
+                names.append(name)
+        if len(names) == 1:
+            lines.append("我和%s结了婚。" % names[0])
+        elif names:
+            rest = "、".join(names[1:])
+            lines.append("我和%s结了婚，后来又和%s结了婚。" % (names[0], rest))
+    if _CHILD.search(ask):
+        eldest = []
+        later = []
+
+        def remember(bucket, name: str) -> None:
+            if not name or name in {"奥拉斯"} or name in eldest or name in later:
+                return
+            bucket.append(name)
+
+        for sent in parts:
+            if not re.search(r"长子|儿子|女儿", sent):
+                continue
+            for matched in re.finditer(r"长子[——\-]*([\u4e00-\u9fff]{1,4})", sent):
+                remember(eldest, _family_name(matched.group(1)))
+            for pattern in (
+                r"第[一二三四五]个儿子([\u4e00-\u9fff]{1,4})",
+                r"另一个儿子[，,]?([\u4e00-\u9fff]{1,4})",
+                r"儿子([\u4e00-\u9fff]{1,3})",
+            ):
+                for matched in re.finditer(pattern, sent):
+                    remember(later, _family_name(matched.group(1)))
+        later = [name for name in later if name not in eldest]
+        if eldest and later:
+            lines.append("我们的长子是%s，后来又有了儿子%s。" % (eldest[0], "、".join(later)))
+        elif eldest:
+            lines.append("我们的长子是%s。" % "、".join(eldest))
+        elif len(later) == 1:
+            lines.append("资料里写到儿子%s。" % later[0])
+        elif later:
+            lines.append("资料里写到儿子%s。" % "、".join(later))
+    if not lines:
+        return ""
+    from tts.speaktext import to_spoken_zh
+    return to_spoken_zh("".join(lines))
 
 
 def is_foreign_question(question: str) -> bool:
@@ -267,6 +395,183 @@ def exhibit_names(reply: str, titles: Iterable[str] = (),
                     break
                 start = idx + len(variant)
     return picked
+
+
+_GUIDE = re.compile(
+    r"导览|带我逛|带我参观|带我看看|带我讲解|"
+    r"参观路线|游览路线|讲解路线|推荐路线|"
+    r"怎么逛|如何参观|怎么参观|"
+    r"从哪开始|从哪里开始|先看哪|先看什么|"
+    r"开始导览|帮我导览|给我导览"
+)
+_EXHIBIT_ASK = re.compile(
+    r"展品|这幅画|那幅画|这个画|这件作品|那件作品|"
+    r"这件文物|那件文物|这件器物|名画|画作|这个展品|那个展品"
+)
+_BTN_PUNCT = re.compile(r"[\s，。！？、；：,.!?;:\"“”‘’'（）()【】\[\]《》·・]+")
+# 前端按钮直接把这三句当 type=tts 的 text 发来，不再交给大模型改写。
+_BUTTON_SCRIPTS = (
+    ("介绍一下你的展品", "exhibit"),
+    ("预约二维码展示", "reserve"),
+    ("展馆导览图展示", "guide"),
+)
+
+
+def _name_pairs(titles: Iterable[str] = (), aliases: Dict[str, str] = None) -> List[Tuple[str, str]]:
+    pairs = []
+    for title in titles or []:
+        title = (title or "").strip()
+        if title:
+            pairs.append((title, title))
+    for key, target in (aliases or {}).items():
+        key = (key or "").strip()
+        target = (target or "").strip()
+        if key and target:
+            pairs.append((key, target))
+    pairs.sort(key=lambda item: len(_NORM.sub("", item[0])), reverse=True)
+    return pairs
+
+
+def _canon_from_pairs(inner: str, pairs: List[Tuple[str, str]]) -> str:
+    key = _NORM.sub("", inner or "")
+    if len(key) < 2:
+        return ""
+    for surface, canonical in pairs:
+        if _NORM.sub("", surface) == key:
+            return canonical
+    return ""
+
+
+def _catalog_for(persona, titles: Optional[Iterable[str]], aliases: Optional[Dict[str, str]]):
+    resolved_titles = list(titles) if titles is not None else None
+    resolved_aliases = dict(aliases) if aliases is not None else None
+    if resolved_titles is None:
+        resolved_titles = []
+        if persona is not None:
+            try:
+                from rag import index as rag
+                resolved_titles = titles_from_items(rag.active_items(persona))
+            except Exception:
+                resolved_titles = []
+    if resolved_aliases is None:
+        resolved_aliases = {}
+        if persona is not None:
+            resolved_aliases = dict(getattr(persona, "exhibit_aliases", None) or {})
+    return resolved_titles, resolved_aliases
+
+
+def first_exhibit_name(text: str, titles: Iterable[str] = (),
+                       aliases: Dict[str, str] = None) -> str:
+    """文本里位置最靠前的展品。重叠时留更长的名字。书名号对不上目录时仍收原文。"""
+    raw = text or ""
+    if not raw:
+        return ""
+    pairs = _name_pairs(titles, aliases)
+    found = []
+
+    def add(start: int, end: int, canonical: str) -> None:
+        if end <= start or not canonical:
+            return
+        found.append((start, end, canonical))
+
+    for matched in _BOOK.finditer(raw):
+        inner = (matched.group(1) or "").strip()
+        canon = _canon_from_pairs(inner, pairs)
+        if not canon and len(_NORM.sub("", inner)) >= 2:
+            canon = inner
+        add(matched.start(), matched.end(), canon)
+
+    for surface, canonical in pairs:
+        variants = [surface]
+        bare = _NORM.sub("", surface)
+        if bare and bare not in variants:
+            variants.append(bare)
+        for variant in variants:
+            start = 0
+            while True:
+                idx = raw.find(variant, start)
+                if idx < 0:
+                    break
+                add(idx, idx + len(variant), canonical)
+                start = idx + len(variant)
+
+    if not found:
+        return ""
+    found.sort(key=lambda item: (item[0], -(item[1] - item[0])))
+    kept = []
+    for start, end, canonical in found:
+        if any(start < prev_end and end > prev_start for prev_start, prev_end, _name in kept):
+            continue
+        kept.append((start, end, canonical))
+    kept.sort(key=lambda item: item[0])
+    return kept[0][2]
+
+
+def _map_screen_intent(intent: str) -> str:
+    label = (intent or "").strip()
+    if label in ("ticket_service", "reserve"):
+        return "reserve"
+    if label in ("visit", "guide"):
+        return "guide"
+    if label == "exhibit":
+        return "exhibit"
+    return ""
+
+
+def button_screen_intent(question: str) -> str:
+    """前端三个按钮的固定话术。对上才返回 guide / reserve / exhibit。"""
+    key = _BTN_PUNCT.sub("", question or "")
+    if not key:
+        return ""
+    for phrase, kind in _BUTTON_SCRIPTS:
+        if key == _BTN_PUNCT.sub("", phrase):
+            return kind
+    return ""
+
+
+def screen_intention_kind(question: str, persona=None, classified_intent: str = "",
+                          titles: Iterable[str] = None, aliases: Dict[str, str] = None) -> str:
+    """导览 guide、预约 reserve、展品 exhibit，其余 talk。只看用户问题。"""
+    from rag.visit import is_visit_query
+    from services.screen_hooks import is_ticket_booking
+
+    text = question or ""
+    button = button_screen_intent(text)
+    if button:
+        return button
+    if is_ticket_booking(text):
+        return "reserve"
+    catalog, alias_map = _catalog_for(persona, titles, aliases)
+    # 点了名的展品优先于「带我看看」这类导览词，屏幕要落到这一件上。
+    if first_exhibit_name(text, catalog, alias_map):
+        return "exhibit"
+    if _GUIDE.search(text) or is_visit_query(text):
+        return "guide"
+    if _EXHIBIT_ASK.search(text):
+        return "exhibit"
+    return _map_screen_intent(classified_intent) or "talk"
+
+
+def intention_event(question: str, reply: str = "", persona=None,
+                    classified_intent: str = "", titles: Iterable[str] = None,
+                    aliases: Dict[str, str] = None) -> dict:
+    """tts_start 前发给前端。展品只带最早出现的一件，其他类型 targetName 为空。"""
+    catalog, alias_map = _catalog_for(persona, titles, aliases)
+    kind = screen_intention_kind(
+        question, persona, classified_intent, catalog, alias_map)
+    target = ""
+    if kind == "exhibit":
+        target = (
+            first_exhibit_name(question or "", catalog, alias_map)
+            or first_exhibit_name(reply or "", catalog, alias_map)
+        )
+    return {
+        "type": "intention",
+        "message": {
+            "intentionType": kind,
+            "targetName": target or "",
+        },
+    }
 
 
 def pack_done(intent: str, hook_suggest: List[str], exhibit_names_found: List[str],

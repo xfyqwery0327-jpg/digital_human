@@ -113,6 +113,7 @@ function Get-LlmPath([string]$tag) {
 function Get-CosyRoot {
     foreach ($c in @(
         (Join-Path $Root "CosyVoice"),
+        "D:\projects\CosyVoice",
         "E:\projects\Robot_Intelligent_Voice_System\CosyVoice",
         "C:\ro\CosyVoice"
     )) {

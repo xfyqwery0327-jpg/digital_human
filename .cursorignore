@@ -1,0 +1,47 @@
+﻿# 权重与模型
+models/
+*.gguf
+*.safetensors
+*.onnx
+*.pt
+*.pth
+*.bin
+*.rar
+*.whl
+
+# 音色与合成音频
+voice/**/*.mp3
+voice/**/*.wav
+voices/
+
+# 检索二进制，JSON 映射仍可读
+**/*.pkl
+**/faiss.index
+**/*.faiss
+
+# 运行日志、会话、缓存
+logs/
+sessions/
+out/
+.venv-kb/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+projectsdigital_human.pytest-tmp/
+.codegraph/
+
+# 体积过大的方案包，以及本机快捷方式
+妇好方案及知识库/
+CosyVoice/
+CosyVoice.lnk
+
+# cmd 误生成的空文件
+monet/Accept
+monet/GET
+monet/Host
+monet/User-Agent
+monet/curl.exe
+monet/findstr
+monet/min_mb
+monet/python

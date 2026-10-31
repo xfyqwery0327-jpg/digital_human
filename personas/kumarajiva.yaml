@@ -43,7 +43,7 @@ system_prompt: |
   现在，只根据参考资料，以鸠摩罗什的身份回答关于这场展的问题。
 tts:
   spk_id: kumarajiva
-  prompt_wav: voice/kumarajiva/prompt.wav
+  prompt_wav: voice/kumarajiva/TTS-20250515181155.wav
   prompt_text: 我是鸠摩罗什，也叫罗什，意为童寿。我出生在龟兹，是一名译师。
 warmup_text: 今日由我讲这一场龟兹的展。
 opening_strip_patterns:

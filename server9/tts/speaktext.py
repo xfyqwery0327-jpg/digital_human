@@ -126,11 +126,11 @@ def _split_punct_keep_decimal(text: str) -> list:
 
 
 def split_by_marks(text: str) -> list:
-    """只在标点或书名号右界断开。《》里面的逗号、句号都不切。
+    """只在标点处断开。书名号本身不切，《》里面的逗号、句号也不切。
 
-    「我画的《睡莲》是晚年最重要的作品。」切成
-    「我画的《睡莲》」和「是晚年最重要的作品。」
-    不按字数从「最重」和「要」中间断开。
+    「我画的《睡莲》是晚年最重要的作品。」整句保留。
+    「是晚年最重要的作品，在吉维尼。」在逗号处切开。
+    不按字数从「最重」和「要」中间断开。小数点两侧都是数字时不切。
     """
     raw = (text or "").strip()
     if not raw:
@@ -138,7 +138,8 @@ def split_by_marks(text: str) -> list:
     parts = []
     buf = []
     depth = 0
-    for ch in raw:
+    n = len(raw)
+    for i, ch in enumerate(raw):
         buf.append(ch)
         if ch == "《":
             depth += 1
@@ -146,21 +147,98 @@ def split_by_marks(text: str) -> list:
         if ch == "》":
             if depth > 0:
                 depth -= 1
-            if depth == 0:
-                piece = "".join(buf).strip()
-                if piece:
-                    parts.append(piece)
-                buf = []
             continue
-        if depth == 0 and ch in "，。！？；、,.!?":
-            piece = "".join(buf).strip()
-            if piece:
-                parts.append(piece)
-            buf = []
+        if depth != 0 or ch not in "，。！？；、,.!?":
+            continue
+        if ch in ".,":
+            prev_d = i > 0 and raw[i - 1].isdigit()
+            next_d = i + 1 < n and raw[i + 1].isdigit()
+            if prev_d and next_d:
+                continue
+        piece = "".join(buf).strip()
+        if piece:
+            parts.append(piece)
+        buf = []
     tail = "".join(buf).strip()
     if tail:
         parts.append(tail)
     return parts or [raw]
+
+
+_JIEBA_PUNCT = set("，。！？；、,.!?:：…·．“”\"'‘’（）()【】[]《》「」『』—–~～")
+_jieba_ready = False
+
+
+def _jieba_cut(text: str) -> list:
+    """按词切开。专名词典和检索共用一份，加载失败就用 jieba 默认词典。"""
+    global _jieba_ready
+    import jieba
+    if not _jieba_ready:
+        try:
+            from config import DICT_PATH
+            if DICT_PATH.exists():
+                jieba.load_userdict(str(DICT_PATH))
+        except Exception:
+            pass
+        _jieba_ready = True
+    return [w for w in jieba.lcut(text or "") if w and not w.isspace()]
+
+
+def _glue_jieba_punct(words: list) -> list:
+    """标点不是批次边界，贴在前一个词上。书名号里的词合成一条。"""
+    out = []
+    for word in words:
+        if not word or word.isspace():
+            continue
+        if out and all(ch in _JIEBA_PUNCT for ch in word):
+            out[-1] += word
+            continue
+        out.append(word)
+    merged = []
+    buf = ""
+    depth = 0
+    for word in out:
+        if depth or "《" in word or "「" in word or "『" in word:
+            buf += word
+            depth += word.count("《") + word.count("「") + word.count("『")
+            depth -= word.count("》") + word.count("」") + word.count("』")
+            if depth <= 0:
+                merged.append(buf)
+                buf = ""
+                depth = 0
+            continue
+        merged.append(word)
+    if buf:
+        merged.append(buf)
+    return merged
+
+
+def jieba_pieces(text: str) -> list:
+    """整段按 jieba 拆成批次条目。逗号、句号留在前一个词上，不单独成批。"""
+    raw = (text or "").strip()
+    if not raw:
+        return []
+    pieces = _glue_jieba_punct(_jieba_cut(raw))
+    return pieces or [raw]
+
+
+def take_jieba_ready(buf: str, flush: bool = False) -> tuple:
+    """流式缓冲里已经能确定的词先交出去，最后一个词留着，等后面的字再切。
+
+    flush=True 时把剩余整段交出去，用于 LLM 结束。
+    返回 (可进 TTS 批次的词, 还要继续攒的尾巴)。
+    """
+    raw = buf or ""
+    if not raw.strip():
+        return [], ""
+    pieces = jieba_pieces(raw)
+    if not pieces:
+        return [], ""
+    if flush:
+        return pieces, ""
+    if len(pieces) == 1:
+        return [], raw
+    return pieces[:-1], pieces[-1]
 
 
 def split_speak_chunks(text: str, max_chars: int = 40) -> list:

@@ -56,8 +56,8 @@ def test_unpack_qwen_wavs_accepts_pair_and_bare_wave():
 
 
 def test_qwen_codec_budget_stays_short_and_cache_resets():
-    assert codec_budget("我是克洛德·莫奈，") == 96
-    assert codec_budget("字" * 140) == 140 * 4 + 48
+    assert codec_budget("我是克洛德·莫奈，") == 52
+    assert codec_budget("字" * 140) == 140 * 4 + 16
     assert codec_budget("字" * 400) == 1024
 
     class Predictor:

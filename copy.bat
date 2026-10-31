@@ -5,7 +5,7 @@ for %%I in ("%~dp0.") do set "NAME=%%~nxI"
 set "SRC=%~dp0"
 set "DEST=D:\projects\copy\%NAME%"
 set "ARCHIVE=D:\projects\copy\%NAME%.7z"
-set "XD=.git .venv .venv-kb .pytest_cache __pycache__ run .cursor .codegraph logs sessions out CosyVoice"
+set "XD=.git .venv .venv-kb .pytest_cache __pycache__ run .cursor .codegraph logs sessions out CosyVoice projectsdigital_human.pytest-tmp"
 
 if "%~1"=="1" goto mode1
 if "%~1"=="2" goto mode2
@@ -27,12 +27,9 @@ if errorlevel 1 goto mode1
 goto :eof
 
 :help
-echo 用法：copy.bat 1 ^| 2 ^| 3
-echo 目标：D:\projects\copy\当前项目英文名
 echo 1. 第一次复制需要带上模型，文件
 echo 2. 只需要复制项目代码文件，并覆盖
 echo 3. 将copy好的文件打包7z
-echo CosyVoice 是目录联接，不会复制语音权重。
 exit /b 0
 
 :mode1
@@ -49,16 +46,16 @@ echo 模式 1 完成。
 exit /b 0
 
 :mode2
-echo 模式 2：只覆盖项目代码，不复制模型，也不删除目标里已有的模型
+echo 模式 2：只覆盖项目代码，不复制模型和大目录，也不删除目标里已有的模型
 echo   %DEST%
 if not exist "D:\projects\copy" mkdir "D:\projects\copy"
-robocopy "%SRC%." "%DEST%" /E /IS /IT /COPY:DAT /R:2 /W:2 /MT:8 /XJ /XD %XD% models /XF *.pyc *.rar
+robocopy "%SRC%." "%DEST%" /E /IS /IT /COPY:DAT /R:2 /W:2 /MT:8 /XJ /XD %XD% "%SRC%models" "%SRC%kb" "%SRC%index" "%SRC%voice" "%SRC%妇好方案及知识库" /XF *.pyc *.rar
 set "RC=%ERRORLEVEL%"
 if %RC% GEQ 8 (
   echo 复制失败，robocopy 退出码 %RC%
   exit /b %RC%
 )
-echo 模式 2 完成。目标里已有的模型保持不动。
+echo 模式 2 完成。目标里已有的模型、知识库、索引和语音保持不动。
 exit /b 0
 
 :mode3

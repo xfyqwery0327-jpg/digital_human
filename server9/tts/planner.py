@@ -26,7 +26,7 @@ class UnitPlanner:
         self.cps: Optional[float] = None
 
     def _split_clause(self, text: str) -> List[str]:
-        """按书名号和标点切开。字数封顶只在明确打开 split_chars 时才用。"""
+        """按标点切开。书名号里面的标点不切。字数封顶只在明确打开 split_chars 时才用。"""
         if self.split_marks:
             from tts.speaktext import split_by_marks
             parts = split_by_marks(text)
@@ -95,10 +95,8 @@ class UnitPlanner:
     def take(self, backlog: List[str], ahead_sec: float, max_units: int = 1) -> List[str]:
         """从 backlog 头部按顺序取走最多 max_units 段。相邻小句能放进 char_cap 才拼在一起。
 
-        没测过速度时 cap 为 0，不拼句，但仍然取满 max_units。Qwen 的单句调用
-        墙钟盖不住这句音频，首轮若只送一句，句间空档就是整句合成时间。
-        下一段更长也要收进同一批：批的墙钟等于最长那段，多带上短句不增加墙钟，
-        音频却变长。split_marks 时只在书名号右界和标点处切开，不从字中间断开。
+        没测过速度时 cap 为 0，不拼句。split_marks 时只在标点处切开，
+        切开的句子不再粘回同一段，也不从字中间断开。
         """
         cap = self.char_cap(ahead_sec)
         limit = max(1, int(max_units))
@@ -109,7 +107,18 @@ class UnitPlanner:
             if len(pieces) > 1:
                 backlog[:0] = pieces[1:]
                 text = pieces[0]
-            while backlog and cap > 0 and len(text) + len(backlog[0]) <= cap:
+            while (not self.split_marks and backlog and cap > 0
+                   and len(text) + len(backlog[0]) <= cap):
                 text += backlog.pop(0)
             units.append(text)
         return units
+
+
+def qwen_round_limit(started: bool, batch: int, queued: int = 1) -> int:
+    """每轮只送一句。
+
+    第一句单独开算，后面每一句也单独开算，不再攒批。
+    batch、queued、started 保留给调用方，避免句子在出声前被并进同一次 generate。
+    """
+    del started, batch, queued
+    return 1

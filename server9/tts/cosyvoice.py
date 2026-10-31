@@ -127,6 +127,9 @@ def _remote_on() -> bool:
 
 def tts_ready() -> bool:
     """/health tts：本地模型在且至少缓存了一个人设 embedding。独立进程模式只要求客户端已接上。"""
+    from tts.remote import use_qwen_service
+    if use_qwen_service() or _remote_on():
+        return cosyvoice_model is not None
     from tts.engine import use_qwen_tts
     if use_qwen_tts():
         from tts.qwen import qwen_ready
@@ -157,7 +160,8 @@ def _retry_register_speakers() -> bool:
 
 def ensure_cosyvoice_loaded() -> bool:
     """请求侧可调用。已加载则补注册；未加载才 CosyVoice3()。禁止探测失败卸模型。"""
-    if _remote_on():
+    from tts.remote import use_qwen_service
+    if use_qwen_service() or _remote_on():
         if cosyvoice_model is None:
             load_cosyvoice()
         return cosyvoice_model is not None
@@ -1381,6 +1385,10 @@ def _load_cosyvoice_unlocked():
     global cosyvoice_model, tts_executor, audio_cache
     global _tts_prompt_arg, _tts_prompt_mode, _tts_support_stream, _tts_use_spk_id, _load_wav_fn
     global _tts_last_error
+    from tts.remote import use_qwen_service, activate_qwen_service
+    if use_qwen_service():
+        activate_qwen_service()
+        return
     if _remote_on():
         from tts.remote import activate_remote_tts
         activate_remote_tts()
@@ -1660,6 +1668,14 @@ def _load_cosyvoice_unlocked():
 def synthesize_speech_pcm(text: str, speaker: str = "中文男",
                           cancel_ev: Optional[threading.Event] = None,
                           persona=None) -> Tuple[bytes, int]:
+    from tts.remote import use_qwen_service
+    if use_qwen_service():
+        if cosyvoice_model is None:
+            load_cosyvoice()
+        from tts.remote import qwen_service_url, speaker_id_of, synthesize_pcm as _remote_pcm
+        p = resolve_tts_persona(persona)
+        return _remote_pcm(
+            text, speaker_id_of(p, speaker), cancel_ev, base=qwen_service_url())
     from tts.engine import use_qwen_tts
     if use_qwen_tts():
         if cosyvoice_model is None:
@@ -1677,6 +1693,12 @@ def synthesize_speech_pcm(text: str, speaker: str = "中文男",
                     return cached
                 audio_cache.drop(text, speaker, fmt='pcm', persona_id=pid)
         pcm_bytes, sr = _qwen_pcm(text, p, cancel_ev)
+        if pcm_bytes and _pcm_peak(pcm_bytes) < 800:
+            _tts_log("[TTS] qwen quiet drop peak=%s text=%s" % (_pcm_peak(pcm_bytes), (text or "")[:40]))
+            # === 新增：保留原有静音丢弃，只补重算计数。 ===
+            from tts.qwen_batch import note_pcm_quiet_retry
+            note_pcm_quiet_retry("pcm_drop", key=(text or "")[:40])
+            return b"", sr
         if audio_cache and pcm_bytes and not _pcm_is_silent(pcm_bytes):
             audio_cache.put(text, speaker, (pcm_bytes, sr), fmt='pcm', persona_id=pid)
         return pcm_bytes, sr
@@ -1883,7 +1905,8 @@ async def synthesize_speech_streaming(websocket, safe_send, text: str, speaker: 
         return False
 
     from tts.engine import use_qwen_tts
-    if use_qwen_tts():
+    from tts.remote import use_qwen_service
+    if use_qwen_tts() and not use_qwen_service():
         loop = asyncio.get_running_loop()
         try:
             pcm_bytes, sr = await loop.run_in_executor(
@@ -1950,8 +1973,10 @@ async def synthesize_speech_streaming(websocket, safe_send, text: str, speaker: 
                 print(f"⚠️ 缓存全是静音，已跳过 tts_chunk persona={pid or '-'} '{text[:24]}'")
             return seq, cancelled
 
-    if _remote_on():
+    from tts.remote import use_qwen_service, qwen_service_url
+    if use_qwen_service() or _remote_on():
         from tts.remote import iter_pcm as _remote_iter, speaker_id_of
+        http_base = qwen_service_url() if use_qwen_service() else ""
         loop = asyncio.get_running_loop()
         piece_q: asyncio.Queue = asyncio.Queue()
         spk = speaker_id_of(p, speaker)
@@ -1959,7 +1984,7 @@ async def synthesize_speech_streaming(websocket, safe_send, text: str, speaker: 
         def _pull():
             # 独立进程每合成完一段就往 HTTP 里写一段，这里收到就转发，不等整句。
             try:
-                for chunk, rate in _remote_iter(text, spk, cancel_ev):
+                for chunk, rate in _remote_iter(text, spk, cancel_ev, base=http_base):
                     loop.call_soon_threadsafe(piece_q.put_nowait, (chunk, rate))
             except Exception as e:
                 loop.call_soon_threadsafe(piece_q.put_nowait, e)

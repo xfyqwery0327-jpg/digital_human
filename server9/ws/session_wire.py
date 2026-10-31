@@ -6,7 +6,7 @@ from typing import Optional, Sequence, Union
 
 # 这些帧带 session_id。旧会话被新一轮打断后禁止再下发，否则 UE 会把播放器关掉。
 TTS_SESSION_WIRE = frozenset({
-    "tts_start", "tts_end", "tts_chunk", "tts_sentence", "llm_answer",
+    "intention", "tts_start", "tts_end", "tts_chunk", "tts_sentence", "llm_answer",
 })
 
 

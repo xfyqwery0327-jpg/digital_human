@@ -12,6 +12,7 @@ from rag.dialogue import (
     FOREIGN_REPLY, RealtimeMemory, exhibit_names, is_foreign_question,
     note_hall, note_realtime, pack_done, realtime_reply, rule_intent,
     suggest_hooks, titles_from_items, visit_fact_reply,
+    is_noise_question, is_relation_question, is_family_question, family_reply,
 )
 from rag.scope import is_other_exhibition_query, refuse_text
 from config import PERSONAS_DIR
@@ -19,6 +20,34 @@ from config import PERSONAS_DIR
 
 def _persona(pid):
     return _parse_persona(_yaml_load(PERSONAS_DIR / ("%s.yaml" % pid)), pid)
+
+
+def test_noise_relation_and_family_do_not_invent():
+    assert is_noise_question("六")
+    assert is_noise_question("12")
+    assert not is_noise_question("今天什么天气啊")
+    assert is_relation_question("呃你和泪落案是什么关系啊怎么认识的")
+    assert not is_relation_question("你和《睡莲》是什么关系")
+    assert is_family_question("你有几个孩子")
+    assert is_family_question("你有几个老婆")
+    assert not is_family_question("《卡美尔》画的是谁")
+    hits = [{
+        "text": (
+            "结识卡美尔。1867年7月，卡美尔生下他们的长子——简。"
+            "1870年6月28日，与卡美尔结婚。3月，卡美尔生下第二个儿子米契尔后病情恶化。"
+            "莫奈有几个儿子？1878年3月17日，他们有了另一个儿子，迈克尔（Michael）。"
+            "1870年，莫奈与卡米尔结婚。1879年，莫奈夫人死于盆腔癌。"
+            "1892年，同年莫奈与爱丽丝结婚。婚姻\n"
+            "欧希德宣告破产，莫奈与欧希德的妻子爱丽丝互通款曲。"
+        ),
+    }]
+    child = family_reply("你有几个孩子", hits)
+    wife = family_reply("你有几个老婆", hits)
+    assert "简" in child and "米契尔" in child
+    assert "迈克尔" not in child and "病情" not in child and "？" not in child
+    assert "卡美尔" in wife and "爱丽丝" in wife and "结了婚" in wife
+    assert "莫奈我" not in wife and "癌" not in wife and "死于" not in wife
+    assert family_reply("你有几个孩子", [{"text": "今天展出睡莲。"}]) == ""
 
 
 def test_weather_second_turn_has_no_digits():

@@ -10,7 +10,7 @@ import requests
 from fastapi import WebSocket, WebSocketDisconnect
 
 from config import *
-from llm.client import extract_clean_delta, clean_stream_sentence, clean_full_answer, SENT_END, _find_sentence_end, strip_identity_opening
+from llm.client import extract_clean_delta, clean_stream_sentence, clean_full_answer, SENT_END, _find_sentence_end, strip_identity_opening, iter_llm_sse
 from session import SessionState, persistence, active_sessions
 from rag.intent import (
     intent_classifier, sentiment_analyzer, ner_system,
@@ -20,7 +20,8 @@ from llm.persona import system_prompt, chitchat_reply
 from rag.dialogue import (
     is_foreign_question, FOREIGN_REPLY, note_hall, note_realtime, realtime_reply,
     suggest_hooks, visit_fact_reply, exhibit_names, titles_from_items, pack_done,
-    HALL_INTENTS,
+    HALL_INTENTS, is_noise_question, is_relation_question, is_family_question,
+    family_reply,
 )
 from services.local_feed import feed_bundle
 from services.screen_hooks import (
@@ -234,6 +235,28 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                 await safe_send(pack_done("knowledge", [], [], True, [], [], None))
                 continue
 
+            aside_fact = None
+            aside = is_noise_question(question) or is_relation_question(question)
+            if is_family_question(question):
+                aside = True
+                aside_fact = await loop.run_in_executor(
+                    None, lambda: family_reply(question, persona=active()))
+            if aside:
+                reply = aside_fact or refuse_text(persona)
+                print(f"🚫 闲句、认人或家庭问题，不叫大模型: {question[:40]}")
+                await safe_send({"type": "text", "content": reply})
+                if enable_audio and tts.cosyvoice_model:
+                    try:
+                        audio_b64 = await _tts_b64(reply, speaker, persona)
+                        await safe_send({"type": "audio", "content": audio_b64,
+                                         "sentence": reply, "index": 0})
+                    except Exception as e:
+                        print(f"⚠️ TTS 失败: {e}")
+                session.add_turn(question, reply, [], None, [], "knowledge")
+                persistence.save_session(session)
+                await safe_send(pack_done("knowledge", [], [], not aside_fact, [], [], None))
+                continue
+
             # 意图识别移入 executor，不阻塞事件循环
             intent, raw_score, _conf = await loop.run_in_executor(
                 None, intent_classifier.classify, question)
@@ -370,7 +393,7 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                     try:
                         resp = requests.post(LLM_URL, json=llm_payload, timeout=60, stream=True)
                         resp.raise_for_status()
-                        for line in resp.iter_lines(decode_unicode=True):
+                        for line in iter_llm_sse(resp):
                             loop.call_soon_threadsafe(sse_queue.put_nowait, line)
                     except Exception:
                         pass

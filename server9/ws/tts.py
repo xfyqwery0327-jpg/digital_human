@@ -3,7 +3,6 @@
 from __future__ import annotations
 import asyncio
 import json
-import re
 import time
 import uuid
 import threading
@@ -17,14 +16,15 @@ from llm.persona import system_prompt, pick_hello, chitchat_reply
 from rag.intent import intent_classifier
 from persona.registry import registry
 from persona.runtime import resolve, bind, active
-from llm.client import extract_clean_delta, clean_stream_sentence, SENT_END, clean_full_answer, _find_sentence_end, strip_identity_opening
+from llm.client import extract_clean_delta, clean_stream_sentence, SENT_END, clean_full_answer, _find_sentence_end, strip_identity_opening, iter_llm_sse
 from rag import index as rag
 from rag.search import search as search_fn, works_answer_hint
 from tts.cosyvoice import push_sentence_pcm, tts_output_rate
 from tts import cosyvoice as tts
 from tts.engine import tts_engine_name
 from tts.playback import PcmPlayClock
-from tts.planner import UnitPlanner
+from tts.planner import UnitPlanner, qwen_round_limit
+from tts.speaktext import split_by_marks
 from ws.hub import tts_fanout, attach_robot_id, accept_websocket
 from ws.session_wire import tts_wire_allowed
 from robot.hub import robot_hub
@@ -32,9 +32,9 @@ from rag.scope import is_other_exhibition_query, clamp_hall_answer, hall_safe_se
 from rag.visit import visit_hint, guard_hall_clock, filter_spoken_sentence
 from rag.dialogue import (
     is_foreign_question, FOREIGN_REPLY, note_hall, note_realtime, realtime_reply,
-    rule_intent,
+    rule_intent, is_noise_question, is_relation_question, is_family_question, family_reply,
     suggest_hooks, visit_fact_reply, exhibit_names, titles_from_items, HALL_INTENTS,
-    RealtimeMemory,
+    RealtimeMemory, intention_event, button_screen_intent,
 )
 from services.local_feed import feed_bundle
 from services.screen_hooks import (
@@ -149,6 +149,38 @@ async def coalesce_backlog(queue, backlog, min_units: int, timeout: float,
     return eof
 
 
+async def wait_pcm_or_wake(pcm_fut, wake: asyncio.Event) -> None:
+    """等这句 PCM 算完，或等队列里来了新文本。
+
+    不能用 asyncio.wrap_future 再 cancel。取消包装任务会把 concurrent Future
+    一起取消，GPU 算完后结果被丢掉，后面也就不会发 tts_chunk / tts_end。
+    """
+    loop = asyncio.get_running_loop()
+    poked = asyncio.Event()
+
+    def _poke(_fut):
+        loop.call_soon_threadsafe(poked.set)
+
+    if pcm_fut.done():
+        poked.set()
+    else:
+        pcm_fut.add_done_callback(_poke)
+    wake_task = asyncio.create_task(wake.wait())
+    poke_task = asyncio.create_task(poked.wait())
+    try:
+        await asyncio.wait(
+            {wake_task, poke_task}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for task in (wake_task, poke_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(wake_task, poke_task, return_exceptions=True)
+        try:
+            pcm_fut.remove_done_callback(_poke)
+        except Exception:
+            pass
+
+
 async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str,
                              speaker: str, enable_llm: bool, session_id: str,
                              cancel_ev: threading.Event,
@@ -185,6 +217,14 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
         nonlocal started
         if not started:
             started = True
+            reply = (control_box.get("reply") or "").strip() or (text_hint or "").strip()
+            event = intention_event(
+                user_question, reply, persona,
+                control_box.get("classified_intent") or "")
+            msg = event.get("message") or {}
+            print(f"🎯 屏幕意图: {msg.get('intentionType')} "
+                  f"target={msg.get('targetName') or '-'} session={session_id[:8]}")
+            await emit(event)
             await emit({"type": "tts_start", "session_id": session_id,
                         "format": "pcm", "sample_rate": tts_output_rate(),
                         "channels": 1, "sample_width": 2, "text": text_hint})
@@ -197,6 +237,7 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
     async def send_llm_answer(text: str):
         if text:
             dialogue_state.last_answer = text
+            control_box["reply"] = text
         await ensure_started(text)
         await emit({"type": "llm_answer", "session_id": session_id, "text": text})
 
@@ -235,7 +276,10 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
     persona = active()
     if dialogue_state is None:
         dialogue_state = RealtimeMemory()
-    control_box = {"intent": "knowledge", "hook_suggest": [], "exhibit_names": []}
+    control_box = {
+        "intent": "knowledge", "hook_suggest": [], "exhibit_names": [],
+        "classified_intent": "", "reply": "",
+    }
 
     def _remember(intent: str, reply: str, hall: bool = False, refused: bool = False):
         if hall:
@@ -349,12 +393,129 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
         if last_item is not None and not last_pcm_ok:
             print(f"⚠️ 本轮最后一句没有声音 session={session_id[:8]} '{last_item[0][:30]}'")
 
-    async def planned_worker(model_ok: bool):
-        """整句出声引擎：推送不等播放，推完立刻合成下一段。
+    async def _planned_qwen_parallel(qwen_pool):
+        """拆开的小句最多同时算 window 路，PCM 仍按原句序推。第一句一到就开算。"""
+        nonlocal seq, cancelled, last_pcm_ok, sent_idx
+        planner = UnitPlanner(
+            merge_chars,
+            split_chars=QWEN_TTS_SPLIT_CHARS if qwen_batch else 0,
+            split_marks=qwen_batch and QWEN_TTS_SPLIT_CHARS <= 0,
+        )
+        backlog = []
+        eof = False
+        inflight = []
+        last_item = None
+        tts._tts_log("[TTS] qwen %s window=%s session=%s" % (
+            getattr(qwen_pool, "kind", "pool"), qwen_pool.window(), session_id[:8]))
 
-        客户端缓冲少时只送一个小句，缓冲够再把后面的小句拼长；Qwen3-TTS 把排着的几段一次 batch。
+        if QWEN_TTS_FIRST_MS > 0:
+            item = await audio_queue.get()
+            if item is None:
+                return None
+            backlog.append(item)
+            if not backlog_has_strong_end(backlog):
+                if await wait_first_sentence(
+                        audio_queue, backlog, QWEN_TTS_FIRST_MS / 1000.0, cancel_ev):
+                    eof = True
+
+        wake = asyncio.Event()
+
+        async def reader():
+            nonlocal eof
+            while not eof:
+                item = await audio_queue.get()
+                if item is None:
+                    eof = True
+                else:
+                    backlog.append(item)
+                wake.set()
+
+        reader_task = None if eof else asyncio.create_task(reader())
+
+        def fill():
+            nonlocal sent_idx
+            while backlog and len(inflight) < qwen_pool.window() and not cancel_ev.is_set():
+                units = planner.take(backlog, play_clock.remain(tail=0.0), max_units=1)
+                if not units:
+                    break
+                text = units[0]
+                idx = sent_idx
+                sent_idx += 1
+                inflight.append((text, idx, qwen_pool.submit(text, speaker, persona, cancel_ev)))
+
+        async def push_one():
+            nonlocal seq, cancelled, last_pcm_ok, last_item
+            text, idx, fut = inflight.pop(0)
+            try:
+                if not fut.cancelled():
+                    await asyncio.wrap_future(fut)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                print(f"⚠️ Qwen 并行句失败 idx={idx} {type(e).__name__}: {e}")
+            if cancel_ev.is_set():
+                cancelled = True
+                return False
+            last_item = (text, idx)
+            before = pcm_bytes_sent
+            seq, cancelled = await push_sentence_pcm(
+                websocket, gated_send, text, speaker, session_id, seq, cancel_ev,
+                subtitle_text=text, subtitle_index=idx, on_pcm=on_pcm, persona=persona)
+            last_pcm_ok = pcm_bytes_sent > before
+            if not last_pcm_ok:
+                print(f"⚠️ 末句/该句无 PCM idx={idx} persona={getattr(persona, 'id', '')} '{text[:30]}'")
+            return not cancelled
+
+        try:
+            while True:
+                if cancel_ev.is_set():
+                    cancelled = True
+                    break
+                fill()
+                if inflight and (inflight[0][2].done() or eof or len(inflight) >= qwen_pool.window()):
+                    if not await push_one():
+                        break
+                    continue
+                if inflight:
+                    wake.clear()
+                    if backlog or inflight[0][2].done():
+                        continue
+                    await wait_pcm_or_wake(inflight[0][2], wake)
+                    continue
+                if eof:
+                    break
+                wake.clear()
+                if backlog or eof:
+                    continue
+                await wake.wait()
+        finally:
+            if reader_task is not None:
+                reader_task.cancel()
+                try:
+                    await reader_task
+                except asyncio.CancelledError:
+                    pass
+        return last_item
+
+    async def planned_worker(model_ok: bool):
+        """整句出声引擎：按标点切开。PCM 仍按原句序推。
+
+        Qwen 默认走单进程动态 batch（最多 3 句一次 generate）。
+        QWEN_TTS_SCHED=procs 时才用旧的多进程池。第一句文本一到就开算。
         """
         nonlocal seq, cancelled, last_pcm_ok, sent_idx
+        from tts.remote import use_qwen_service
+        if qwen_batch and model_ok and not use_qwen_service():
+            from config import QWEN_TTS_SCHED
+            if QWEN_TTS_SCHED == "procs":
+                from tts.qwen_pool import pool as qwen_pool
+                if qwen_pool.window() > 1:
+                    return await _planned_qwen_parallel(qwen_pool)
+            else:
+                # === 新增：单进程动态 batch，不再默认拉起 3 个进程。 ===
+                from tts.qwen_batch import scheduler
+                scheduler.ensure_started()
+                return await _planned_qwen_parallel(scheduler)
         planner = UnitPlanner(
             merge_chars,
             split_chars=QWEN_TTS_SPLIT_CHARS if qwen_batch else 0,
@@ -410,8 +571,12 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
             if not backlog:
                 break
             ahead = play_clock.remain(tail=0.0)
-            units = planner.take(backlog, ahead,
-                                 max_units=QWEN_TTS_BATCH if qwen_batch and model_ok else 1)
+            if qwen_batch and model_ok:
+                max_units = qwen_round_limit(
+                    pcm_bytes_sent > 0, QWEN_TTS_BATCH, len(backlog))
+            else:
+                max_units = 1
+            units = planner.take(backlog, ahead, max_units=max_units)
             if _diag[0] < 16:
                 _cap = planner.char_cap(ahead)
                 print(f"[DIAG] iter={_diag[0]} ahead={ahead:.2f} k={planner.k} "
@@ -460,7 +625,19 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
     audio_task = asyncio.create_task(audio_worker())
 
     try:
-        if is_foreign_question(user_question):
+        button_kind = button_screen_intent(user_question)
+        if button_kind:
+            llm_answer = (user_question or "").strip()
+            mapped = {"exhibit": "exhibit", "reserve": "ticket_service", "guide": "visit"}[button_kind]
+            control_box["classified_intent"] = mapped
+            print(f"🖥 按钮话术 {button_kind}: {llm_answer[:40]}")
+            _remember(mapped, llm_answer)
+            await send_llm_answer(llm_answer)
+            for sent in split_by_marks(llm_answer):
+                await send_subtitle(sent)
+                if cancelled:
+                    break
+        elif is_foreign_question(user_question):
             print(f"🌐 非中文提问，先说明只用中文: {user_question[:40]}")
             llm_answer = FOREIGN_REPLY
             _remember("chitchat", llm_answer)
@@ -510,6 +687,20 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
             _remember("knowledge", llm_answer, refused=True)
             await send_llm_answer(llm_answer)
             await send_subtitle(llm_answer)
+        elif is_noise_question(user_question) or is_relation_question(user_question):
+            print(f"🚫 闲句或认人问题，不叫大模型: {user_question[:40]}")
+            llm_answer = refuse_text()
+            _remember("knowledge", llm_answer, refused=True)
+            await send_llm_answer(llm_answer)
+            await send_subtitle(llm_answer)
+        elif is_family_question(user_question):
+            fact = await loop.run_in_executor(
+                None, lambda: family_reply(user_question, persona=active()))
+            llm_answer = fact or refuse_text()
+            print(f"👨‍👩‍👧 家庭问题用资料原句: {user_question[:40]} hit={bool(fact)}")
+            _remember("knowledge", llm_answer, refused=not fact)
+            await send_llm_answer(llm_answer)
+            await send_subtitle(llm_answer)
         elif _looks_chitchat(user_question):
             llm_answer = chitchat_reply(user_question, persona)
             _remember("chitchat", llm_answer)
@@ -523,7 +714,7 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
         elif not enable_llm:
             llm_answer = user_question
             await send_llm_answer(llm_answer)
-            sentences = [s.strip() for s in re.split(f"(?<=[{SENT_END}])", llm_answer) if s.strip()]
+            sentences = split_by_marks(llm_answer)
             for sent in sentences:
                 await send_subtitle(sent)
                 if cancelled:
@@ -533,6 +724,8 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
                 print(f"🤖 用户问题: {user_question}")
                 intent, raw_score, _conf = await loop.run_in_executor(
                     None, intent_classifier.classify, user_question)
+                if intent_classifier.should_route_to(intent, raw_score):
+                    control_box["classified_intent"] = intent
                 route_intent = intent if (
                     intent in HALL_INTENTS
                     and intent_classifier.should_route_to(intent, raw_score)
@@ -577,7 +770,7 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
                             resp = requests.post(LLM_URL, json=llm_payload, timeout=60, stream=True)
                             resp_holder['resp'] = resp
                             resp.raise_for_status()
-                            for line in resp.iter_lines(decode_unicode=True):
+                            for line in iter_llm_sse(resp):
                                 if cancel_ev.is_set():
                                     break
                                 loop.call_soon_threadsafe(sse_queue.put_nowait, line)
@@ -599,6 +792,27 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
                     first_logged = False
                     leaked = False
                     clock_state = {}
+
+                    async def emit_piece(sent: str) -> bool:
+                        """返回是否应停止后续口播。"""
+                        nonlocal first_logged
+                        sent = clean_stream_sentence((sent or "").strip())
+                        if not sent:
+                            return False
+                        if not first_logged:
+                            sent = strip_identity_opening(sent, persona)
+                            if not sent:
+                                return False
+                        sent, stop = hall_safe_sentence(sent)
+                        sent = filter_spoken_sentence(
+                            sent, user_question, persona, clock_state)
+                        if not sent:
+                            return stop
+                        if not first_logged:
+                            print(f"⏱️ 首句就绪: {time.time()-t0:.2f}s | {sent[:30]}")
+                            first_logged = True
+                        await send_subtitle(sent)
+                        return stop
 
                     while True:
                         line = await sse_queue.get()
@@ -630,24 +844,9 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
                             pos = _find_sentence_end(buf, SENT_END)
                             if pos == -1:
                                 break
-                            sent = clean_stream_sentence(buf[:pos + 1].strip())
+                            sent = buf[:pos + 1]
                             buf = buf[pos + 1:]
-                            if not sent:
-                                continue
-                            if not first_logged:
-                                sent = strip_identity_opening(sent, persona)
-                                if not sent:
-                                    continue
-                            sent, stop = hall_safe_sentence(sent)
-                            sent = filter_spoken_sentence(
-                                sent, user_question, persona, clock_state)
-                            if not sent:
-                                continue
-                            if not first_logged:
-                                print(f"⏱️ 首句就绪: {time.time()-t0:.2f}s | {sent[:30]}")
-                                first_logged = True
-                            await send_subtitle(sent)
-                            if stop:
+                            if await emit_piece(sent):
                                 leaked = True
                                 break
                             if cancelled:
@@ -664,18 +863,8 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
                                 pass
 
                     if not cancelled and not leaked and buf.strip():
-                        tail = clean_stream_sentence(buf.strip())
-                        if tail and not first_logged:
-                            tail = strip_identity_opening(tail, persona)
-                        if tail:
-                            tail, stop = hall_safe_sentence(tail)
-                            tail = filter_spoken_sentence(
-                                tail, user_question, persona, clock_state)
-                            if not first_logged:
-                                first_logged = True
-                            await send_subtitle(tail)
-                            if stop:
-                                leaked = True
+                        if await emit_piece(buf.strip()):
+                            leaked = True
 
                     if not cancelled:
                         if leaked:

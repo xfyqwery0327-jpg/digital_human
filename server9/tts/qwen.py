@@ -119,11 +119,25 @@ def _install_sdpa_mask_fix() -> bool:
     return True
 
 
+def _enable_fast_kernels() -> None:
+    """打开 PyTorch 自带的 Flash SDPA 和 TF32。多占一点显存，单句前向更快。"""
+    import torch
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cudnn.benchmark = True
+    flash = getattr(torch.backends.cuda, "enable_flash_sdp", None)
+    if flash is not None:
+        torch.backends.cuda.enable_flash_sdp(True)
+        torch.backends.cuda.enable_mem_efficient_sdp(True)
+        torch.backends.cuda.enable_math_sdp(True)
+
+
 def _load_model(model_dir):
     import torch
     from qwen_tts import Qwen3TTSModel
 
     _install_sdpa_mask_fix()
+    _enable_fast_kernels()
     use_cuda = bool(torch.cuda.is_available())
     kwargs = {
         "device_map": "cuda:0" if use_cuda else "cpu",
@@ -133,20 +147,91 @@ def _load_model(model_dir):
     # 装了 flash-attn 时可设 QWEN_TTS_ATTN=flash_attention_2，talker 每步更快。
     attn = (os.environ.get("QWEN_TTS_ATTN") or "sdpa").strip()
     try:
-        return Qwen3TTSModel.from_pretrained(
+        model = Qwen3TTSModel.from_pretrained(
             str(model_dir), attn_implementation=attn, **kwargs)
     except TypeError:
-        return Qwen3TTSModel.from_pretrained(str(model_dir), **kwargs)
+        model = Qwen3TTSModel.from_pretrained(str(model_dir), **kwargs)
+    try:
+        param = next(model.model.parameters())
+        dtype_name = str(param.dtype).replace("torch.", "")
+        device_name = str(param.device)
+    except Exception:
+        dtype_name = "bfloat16" if use_cuda else "float32"
+        device_name = "cuda:0" if use_cuda else "cpu"
+    # 官方包没有 capture_graph。torch.compile 也关掉了 CUDA Graph，避免 RoPE 原地写坏图。
+    _log_tts("[TTS] qwen weights loaded once dtype=%s device=%s attn=%s cudagraph=off capture_graph=off" % (
+        dtype_name, device_name, attn))
+    return model
+
+
+def _compile_predictor(model) -> None:
+    """用 Triton 编译 code predictor。
+
+    每帧还要再跑十几步。关掉 CUDA Graph：RoPE 会原地改写上一轮的输出，
+    图重放会读到被覆盖的张量。动态形状避免每换一句长度就重新编译。
+    """
+    import torch
+    try:
+        import torch._inductor.config as inductor_config
+        knobs = getattr(inductor_config, "triton", None)
+        if knobs is not None and hasattr(knobs, "cudagraphs"):
+            knobs.cudagraphs = False
+    except Exception:
+        pass
+    inner = model.model.talker.code_predictor.model
+    inner.forward = torch.compile(inner.forward, mode="default", fullgraph=False, dynamic=True)
+
+
+def _warmup_voice() -> None:
+    """启动时跑一句短稿，把 CUDA 初始化和编译图的耗时留在开服务，不留在第一声。"""
+    from persona.registry import registry
+    from persona.runtime import bind
+    if not registry._items:
+        registry.load()
+    persona = registry.get("monet")
+    if persona is None:
+        enabled = list(registry.enabled())
+        persona = enabled[0] if enabled else None
+    if persona is None:
+        return
+    text = (getattr(persona, "warmup_text", None) or "测试。").strip() or "测试。"
+    with bind(persona):
+        synthesize_pcm(text[:12], persona=persona)
+
+
+def _prepare_runtime(model_dir) -> None:
+    """编译预测器并预热。编译失败就重新加载未编译的模型，再预热一次。"""
+    global _model, _last_error
+    import tts.cosyvoice as cv
+    from config import QWEN_TTS_COMPILE
+    if QWEN_TTS_COMPILE and _model is not None:
+        try:
+            _compile_predictor(_model)
+            _warmup_voice()
+            _last_error = ""
+            cv._tts_last_error = ""
+            _log_tts("[TTS] qwen compile+warmup ok")
+            return
+        except Exception as e:
+            _log_tts("[TTS] qwen compile failed, reload plain: %s: %s" % (type(e).__name__, e), fail=True)
+            _model = _load_model(model_dir)
+    try:
+        _warmup_voice()
+        _last_error = ""
+        cv._tts_last_error = ""
+        _log_tts("[TTS] qwen warmup ok")
+    except Exception as e:
+        _log_tts("[TTS] qwen warmup skip %s: %s" % (type(e).__name__, e))
 
 
 def codec_budget(text: str) -> int:
     """按字数封顶 codec token。
 
-    12Hz，正常口播大约每个字 4 个 token。150 字大约 600 token。
-    封顶 1024（约 85 秒）。配置里的 8192 约等于 11 分钟，结束符一对不上就停不下来。
+    12Hz，正常口播大约每个字 4 个 token。短句不再保底 96（约 8 秒），
+    结束符没对上时第一声也不会把预算跑满。封顶 1024。
     """
     n = max(1, len((text or "").strip()))
-    return int(min(1024, max(96, n * 4 + 48)))
+    return int(min(1024, max(48, n * 4 + 16)))
 
 
 def _reset_talker_cache(model) -> None:
@@ -192,18 +277,26 @@ def _prompt_for(model, persona):
     pid = (getattr(persona, "id", None) or "default") if persona is not None else "default"
     if not wav:
         raise RuntimeError("人设 %s 没有参考音，Qwen3-TTS 无法克隆" % pid)
-    key = (pid, wav, ref)
+    # xvec_only：只留说话人向量。参考文本和参考码本不进每句 prefill。
+    key = (pid, wav, "xvec")
     with _lock:
         cached = _prompts.get(key)
     if cached is not None:
         return cached
     item = _detach_prompt(model.create_voice_clone_prompt(
         ref_audio=wav,
-        ref_text=ref,
-        x_vector_only_mode=not bool(ref),
+        ref_text=ref or None,
+        x_vector_only_mode=True,
     ))
+    items = item if isinstance(item, (list, tuple)) else [item]
+    for one in items:
+        one.ref_text = None
+        one.ref_code = None
+        one.x_vector_only_mode = True
+        one.icl_mode = False
     with _lock:
         _prompts[key] = item
+    _log_tts("[TTS] qwen prompt cached once xvec_only=1 persona=%s ref_prefill=0" % pid)
     return item
 
 
@@ -220,13 +313,13 @@ def _trim(pcm: bytes, rate: int) -> bytes:
 
 
 def _generate(pieces, persona):
-    """一次 generate 合成 pieces 里的全部句子，返回每句的波形列表和采样率。
-
-    talker 每 80ms 一帧，每帧还要再跑 15 步 code predictor，batch=1 时 GPU 大半在等 Python。
-    多句放进同一个 batch，耗时约等于最长那一句，而不是逐句相加。
-    """
+    """一次只合成当前这几句。调用方按一句送来，算完立刻推，不等下一批。"""
+    from config import QWEN_TTS_GREEDY
     budget = max(codec_budget(p) for p in pieces)
     prompt = _prompt_for(_model, persona)
+    greedy = {}
+    if QWEN_TTS_GREEDY:
+        greedy = {"do_sample": False, "subtalker_dosample": False}
     with _lock:
         _reset_talker_cache(_model)
         try:
@@ -236,13 +329,11 @@ def _generate(pieces, persona):
                 voice_clone_prompt=prompt,
                 non_streaming_mode=True,
                 max_new_tokens=budget,
+                **greedy,
             )
         finally:
             _reset_talker_cache(_model)
-    wavs = _unpack_wavs(generated)
-    from tts.cuda_cache import release_cuda_cache
-    release_cuda_cache("qwen-batch", tight=True)
-    return wavs
+    return _unpack_wavs(generated)
 
 
 def _to_pcm(audio, rate: int) -> bytes:
@@ -261,9 +352,12 @@ def _pcm_peak(pcm: bytes) -> int:
 def _synthesize_piece(piece: str, persona, cancel_ev):
     """一句一算。每句前后清 RoPE，避免上一句的位置偏移把结束符顶飞。"""
     import time
+    import os
     t0 = time.time()
     budget = codec_budget(piece)
-    _log_tts("[TTS] qwen synth begin chars=%s budget=%s text=%s" % (len(piece), budget, piece[:40]))
+    lane = os.environ.get("QWEN_TTS_LANE") or "0"
+    _log_tts("[TTS] qwen synth begin lane=%s chars=%s budget=%s text=%s" % (
+        lane, len(piece), budget, piece[:40]))
     try:
         wavs, sr = _generate([piece], persona)
     except Exception as e:
@@ -274,11 +368,16 @@ def _synthesize_piece(piece: str, persona, cancel_ev):
         return b"", _sample_rate
     rate = int(sr or _sample_rate)
     pcm = _to_pcm(wavs[0] if wavs else None, rate)
+    peak = _pcm_peak(pcm)
     _log_tts("[TTS] qwen synth done chars=%s pcm=%s sr=%s peak=%s wall=%.2fs"
-             % (len(piece), len(pcm), rate, _pcm_peak(pcm), time.time() - t0))
-    if not pcm:
-        msg = "qwen synth empty chars=%s text=%s" % (len(piece), piece[:40])
+             % (len(piece), len(pcm), rate, peak, time.time() - t0))
+    if not pcm or peak < 800:
+        msg = "qwen synth quiet lane=%s chars=%s peak=%s text=%s" % (
+            lane, len(piece), peak, piece[:40])
         _log_tts("[TTS] " + msg, fail=True)
+        # === 新增：业务侧静音重算计数。原有丢弃和抛错保持不变。 ===
+        from tts.qwen_batch import note_pcm_quiet_retry
+        note_pcm_quiet_retry("piece", key=(piece or "")[:40])
         raise RuntimeError(msg)
     return pcm, rate
 
@@ -313,6 +412,10 @@ def synthesize_batch(texts, persona=None, cancel_ev=None, batch_size: int = 0) -
             for i in idxs:
                 if cancel_ev is not None and cancel_ev.is_set():
                     break
+                # === 新增：整批失败后退回逐句，记一笔静音/失败重算。 ===
+                if "quiet" in str(e):
+                    from tts.qwen_batch import note_pcm_quiet_retry
+                    note_pcm_quiet_retry("batch_fallback", key=(items[i] or "")[:40])
                 try:
                     out[i] = _synthesize_piece(items[i], persona, cancel_ev)
                 except Exception:
@@ -399,6 +502,16 @@ def activate() -> bool:
         cv._tts_log("[TTS] qwen3 model=%s sr=%s alloc=%s" % (
             model_dir, _sample_rate, os.environ.get("PYTORCH_CUDA_ALLOC_CONF") or "-"))
         print("✅ Qwen3-TTS 已加载 %s sr=%s" % (model_dir, _sample_rate))
+        _prepare_runtime(model_dir)
+        if os.environ.get("QWEN_TTS_WORKER") != "1":
+            # === 新增：默认单进程动态 batch。procs 才拉起旧的多进程池。 ===
+            from config import QWEN_TTS_SCHED
+            if QWEN_TTS_SCHED == "procs":
+                from tts.qwen_pool import pool
+                pool.ensure_started()
+            else:
+                from tts.qwen_batch import scheduler
+                scheduler.ensure_started()
         return True
     except Exception as e:
         _model = None

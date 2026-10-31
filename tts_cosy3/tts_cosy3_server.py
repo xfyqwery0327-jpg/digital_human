@@ -22,6 +22,8 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+from pydantic import BaseModel, Field
+
 from tts_cosy3.engine import TTSEngine, log, pcm_to_wav_bytes, setup_log_file, wav_stream_header
 from tts_cosy3.split_text import clamp_max_chars
 from tts_cosy3.vram import (
@@ -39,6 +41,16 @@ from tts_cosy3.vram import (
 
 ENGINE = TTSEngine()
 _STOP = threading.Event()
+
+
+class TTSRequest(BaseModel):
+    """放在模块层。create_app 里的注解配合 from __future__ import annotations 解析不到，会被当成查询参数。"""
+
+    text: str = Field(..., description="要合成的口播文本")
+    speaker_id: str = Field("monet", description="已登记的音色")
+    format: str = Field("pcm", description="pcm 或 wav")
+    stream: bool = True
+    max_chars: int = 36
 
 
 def _state_loop() -> None:
@@ -90,13 +102,6 @@ def create_app():
     from pydantic import BaseModel, Field
 
     app = FastAPI(title="CosyVoice3 TTS", version="1.0")
-
-    class TTSRequest(BaseModel):
-        text: str = Field(..., description="要合成的口播文本")
-        speaker_id: str = Field("monet", description="已登记的音色")
-        format: str = Field("pcm", description="pcm 或 wav")
-        stream: bool = True
-        max_chars: int = 36
 
     class ClonePathRequest(BaseModel):
         speaker_id: str

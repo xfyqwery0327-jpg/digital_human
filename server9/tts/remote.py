@@ -10,6 +10,20 @@ def remote_base() -> str:
     return (os.environ.get("TTS_BASE_URL") or "http://127.0.0.1:8810").rstrip("/")
 
 
+def qwen_service_url() -> str:
+    """讲解员直连 qwen-tts-service。并行服务才走分发器。"""
+    return (os.environ.get("TTS_QWEN_URL") or "http://127.0.0.1:8812").rstrip("/")
+
+
+def use_qwen_service() -> bool:
+    """Qwen 口播直连 8812。设 TTS_QWEN_REMOTE=0 才回到本进程加载权重。"""
+    from tts.engine import use_qwen_tts
+    if not use_qwen_tts():
+        return False
+    flag = (os.environ.get("TTS_QWEN_REMOTE") or "1").strip().lower()
+    return flag not in {"0", "false", "no", "off"}
+
+
 def use_remote_tts() -> bool:
     return (os.environ.get("TTS_BACKEND") or "").strip().lower() in {"http", "remote"}
 
@@ -46,20 +60,55 @@ def activate_remote_tts() -> None:
     print(f"🎤 TTS 使用独立进程 {remote_base()} sr={sr}（本进程不加载 CosyVoice）")
 
 
+def activate_qwen_service() -> None:
+    """LLM 答完后的口播直连 qwen-tts-service。本进程不加载 Qwen 权重。"""
+    import tts.cosyvoice as cv
+    base = qwen_service_url()
+    sr = 24000
+    try:
+        import requests
+        resp = requests.get(base + "/health", timeout=2)
+        if resp.status_code == 200:
+            payload = resp.json()
+            sr = int(payload.get("sample_rate") or 24000)
+            cv._tts_last_error = payload.get("tts_error") or ""
+        else:
+            cv._tts_last_error = "口播入口 %s 返回 %s" % (base, resp.status_code)
+    except Exception as exc:
+        cv._tts_last_error = "口播入口未就绪 %s: %s" % (base, exc)
+    cv.cosyvoice_model = RemoteHandle(sr)
+    cv._tts_prompt_mode = "faster-qwen3-tts"
+    cv._tts_support_stream = True
+    cv._tts_use_spk_id = True
+    cv._tts_infer_mode = "faster-qwen3-tts"
+    if not cv._tts_last_error:
+        cv._tts_last_error = ""
+    cv._tts_log("[TTS] llm 口播转 %s sr=%s" % (base, sr))
+    print("🎤 LLM 口播调用 %s sr=%s" % (base, sr))
+
+
 def speaker_id_of(persona, speaker: str = "") -> str:
     if persona is not None and getattr(persona, "id", None):
         return str(persona.id)
     return speaker or "monet"
 
 
-def iter_pcm(text: str, speaker_id: str, cancel_ev=None, timeout: float = 90):
+def iter_pcm(text: str, speaker_id: str, cancel_ev=None, timeout: float = 90, base: str = "",
+              xvec_only=None, prefill=None):
     """边收边吐 (pcm_chunk, sample_rate)，chunk 长度保证是偶数字节。
 
+    请求体对齐 qwen-tts-service：speaker_id 为 kumarajiva、monet、fuhao。
+    不传 xvec_only / prefill 时跟随服务当前模式，不在这里改服务模式。
     连接失败重试两次，覆盖监督进程刚拉起的空档；已经吐过数据就不再重试，避免重复念。
     """
     import requests
-    url = remote_base() + "/v1/tts"
-    body = {"text": text, "speaker_id": speaker_id, "format": "pcm", "stream": True}
+    url = (base or remote_base()).rstrip("/") + "/v1/tts"
+    sid = (speaker_id or "").strip() or "monet"
+    body = {"text": text, "speaker_id": sid, "format": "pcm", "stream": True}
+    if xvec_only is not None:
+        body["xvec_only"] = bool(xvec_only)
+    if prefill is not None:
+        body["prefill"] = bool(prefill)
     last = None
     for attempt in range(3):
         odd = b""
@@ -92,10 +141,10 @@ def iter_pcm(text: str, speaker_id: str, cancel_ev=None, timeout: float = 90):
     raise RuntimeError(f"独立 TTS 不可用（可能正在空闲重启）: {last}") from last
 
 
-def synthesize_pcm(text: str, speaker_id: str, cancel_ev=None, timeout: float = 90) -> tuple:
-    """返回 (pcm_bytes, sample_rate)。"""
+def synthesize_pcm(text: str, speaker_id: str, cancel_ev=None, timeout: float = 90, base: str = "") -> tuple:
+    """返回 (pcm_bytes, sample_rate)。base 为空时走 CosyVoice 独立进程。"""
     buf = bytearray()
     sr = 24000
-    for chunk, sr in iter_pcm(text, speaker_id, cancel_ev, timeout):
+    for chunk, sr in iter_pcm(text, speaker_id, cancel_ev, timeout, base=base):
         buf.extend(chunk)
     return bytes(buf), sr

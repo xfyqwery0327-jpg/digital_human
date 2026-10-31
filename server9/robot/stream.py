@@ -2,7 +2,7 @@
 """机器人 HTTP 一轮 → 前端 /ws/{persona}/tts。
 
 推流顺序（参考 robot-ask-ws-改动说明.md，叠加双人设隔离）：
-asr → tts_start → llm_answer → tts_sentence/tts_chunk → 等 PCM 真实时长+ROBOT_PLAY_TAIL_SEC → tts_end
+asr → intention → tts_start → llm_answer → tts_sentence/tts_chunk → 等 PCM 真实时长+ROBOT_PLAY_TAIL_SEC → tts_end
 仅向该 persona 的 TTS 连接推送，禁止全局广播。
 """
 from __future__ import annotations
@@ -10,17 +10,16 @@ import array
 import asyncio
 import base64
 import io
-import re
 import sys
 import threading
 import time
 import wave
 from typing import Dict, List
 
-from llm.client import SENT_END, strip_identity_opening
+from llm.client import strip_identity_opening
 from tts import cosyvoice as tts
 from tts.cosyvoice import push_sentence_pcm, pack_tts_utterances, tts_output_rate
-from tts.planner import UnitPlanner
+from tts.planner import UnitPlanner, qwen_round_limit
 from tts.playback import PcmPlayClock
 from ws.hub import tts_fanout, attach_robot_id
 from robot.logutil import get_logger
@@ -66,6 +65,25 @@ def _screen_hooks(question: str, reply: str, persona, leaked: bool) -> dict:
         "hook_suggest": suggest_hooks(kind, mem, persona, names),
         "exhibit_names": names,
     }
+
+
+async def _resolve_screen_intention(question: str, reply: str, persona,
+                                   classified_intent: str = "") -> dict:
+    """导览 / 预约 / 展品 / talk。词表能定的不再跑向量分类。"""
+    from rag.dialogue import intention_event, screen_intention_kind
+
+    classified = (classified_intent or "").strip()
+    text = question or ""
+    if not classified and text.strip() and screen_intention_kind(text, persona) == "talk":
+        try:
+            from rag.intent import intent_classifier
+            intent, score, _conf = await asyncio.get_running_loop().run_in_executor(
+                None, intent_classifier.classify, text)
+            if intent_classifier.should_route_to(intent, score):
+                classified = intent
+        except Exception:
+            log.exception("屏幕意图分类失败")
+    return intention_event(text, reply or "", persona, classified)
 
 
 def load_wav_pcm16(path) -> tuple:
@@ -140,7 +158,9 @@ async def push_robot_asr(query: str, session_id: str, robot_id: str,
 
 
 def split_speak_sentences(text: str) -> List[str]:
-    sentences = [s.strip() for s in re.split(f"(?<=[{SENT_END}])", text or "") if s.strip()]
+    """按标点切开。书名号里的标点不切。"""
+    from tts.speaktext import split_by_marks
+    sentences = split_by_marks(text or "")
     if sentences:
         return sentences
     stripped = (text or "").strip()
@@ -152,7 +172,7 @@ async def push_robot_turn_to_ws(speak_text: str, speaker: str,
                                 asr_text: str = "", persona_id: str = "",
                                 fixed_wav: str = "",
                                 preserve_text: bool = False) -> Dict:
-    """一轮只推一次。顺序：asr → tts_start → llm_answer → sentence/chunk → tts_end。
+    """一轮只推一次。顺序：asr → intention → tts_start → llm_answer → sentence/chunk → tts_end。
     只推 /ws/{persona_id}/tts；旧 /ws/tts 视为 monet。
 
     fixed_wav 有值时把预录 wav 转成 PCM 推流。
@@ -214,6 +234,11 @@ async def push_robot_turn_to_ws(speak_text: str, speaker: str,
     tts_started = False
     tts_ended = False
     llm_sent = False
+    intention_sent = False
+    intention_payload = {
+        "type": "intention",
+        "message": {"intentionType": "talk", "targetName": ""},
+    }
     start_hint = sentences[0] if sentences else ""
 
     def _stamp(obj: dict) -> dict:
@@ -222,9 +247,22 @@ async def push_robot_turn_to_ws(speak_text: str, speaker: str,
         payload["persona_id"] = pid
         return payload
 
+    async def _send_intention() -> None:
+        nonlocal last_pushed, intention_sent
+        if intention_sent:
+            return
+        intention_sent = True
+        last_pushed = await tts_fanout.send(_stamp(intention_payload), persona_id=pid)
+        msg = intention_payload.get("message") or {}
+        log.info("已推 intention session=%s robot=%s persona=%s type=%s target=%s",
+                 session_id, rid, pid, msg.get("intentionType") or "talk",
+                 msg.get("targetName") or "-")
+
     async def fanout(obj: dict) -> int:
         nonlocal last_pushed, tts_started, tts_ended, llm_sent
         kind = obj.get("type")
+        if kind == "tts_start":
+            await _send_intention()
         if kind == "tts_end":
             if tts_ended:
                 log.warning("丢弃重复 tts_end session=%s robot=%s persona=%s",
@@ -241,6 +279,7 @@ async def push_robot_turn_to_ws(speak_text: str, speaker: str,
                 return last_pushed
             llm_sent = True
         if kind in ("tts_chunk", "tts_sentence") and not tts_started:
+            await _send_intention()
             last_pushed = await tts_fanout.send(_stamp({
                 "type": "tts_start",
                 "session_id": session_id,
@@ -297,6 +336,8 @@ async def push_robot_turn_to_ws(speak_text: str, speaker: str,
     if not use_canned:
         sr = tts_output_rate()
     hint = sentences[0] if sentences else (speak_text or "")[:40]
+    intention_payload = await _resolve_screen_intention(
+        query, speak_text, persona_obj)
     await fanout({
         "type": "tts_start",
         "session_id": session_id,
@@ -394,10 +435,8 @@ async def push_robot_turn_to_ws(speak_text: str, speaker: str,
                 chunk_sec = len(chunk) / 2.0 / float(sr)
                 await asyncio.sleep(max(0.0, chunk_sec * 0.85))
         elif tts.cosyvoice_model:
-            # 推送不等播放，推完立刻合成下一段。CosyVoice3 / Qwen3-TTS 每次调用都要重算参考音前缀：
-            # Unity 缓冲少时只送一个小句，缓冲够再拼长；Qwen 排着的几段一次 batch。
-            # 不要退回整段一次合成：talker 逐帧自回归，150 字要串行跑四五百帧，首句等太久。
-            from config import QWEN_TTS_BATCH, QWEN_TTS_SPLIT_CHARS
+            # 默认单进程动态 batch，算完仍按原句序推。procs 才走多进程池。
+            from config import QWEN_TTS_BATCH, QWEN_TTS_SCHED, QWEN_TTS_SPLIT_CHARS
             loop = asyncio.get_running_loop()
             qwen = engine == "qwen3"
             planner = UnitPlanner(
@@ -405,42 +444,92 @@ async def push_robot_turn_to_ws(speak_text: str, speaker: str,
                 split_chars=QWEN_TTS_SPLIT_CHARS if qwen else 0,
                 split_marks=qwen and QWEN_TTS_SPLIT_CHARS <= 0,
             )
-            max_units = QWEN_TTS_BATCH if engine == "qwen3" else 1
             backlog = list(sentences)
             bps = 2.0 * float(sr)
             any_pcm = False
-            while backlog and not cancelled:
-                ahead = play_clock.remain(tail=0.0)
-                units = planner.take(backlog, ahead, max_units=max_units)
-                batch_sec = None
-                if len(units) > 1 and not cancel_ev.is_set():
-                    t_pre = time.time()
-                    n_ok = await loop.run_in_executor(
-                        None, lambda texts=list(units): tts.prefetch_batch(
-                            texts, speaker, cancel_ev, persona=persona_obj))
-                    log.info("Qwen 批量预取 %s/%s 段 %.2fs ahead=%.2fs persona=%s",
-                             n_ok, len(units), time.time() - t_pre, ahead, pid)
-                    if n_ok == len(units):
-                        batch_sec = time.time() - t_pre
-                measured = []
-                for sent in units:
+            qwen_pool = None
+            from tts.remote import use_qwen_service
+            if qwen and not use_qwen_service():
+                if QWEN_TTS_SCHED == "procs":
+                    from tts.qwen_pool import pool as qwen_pool
+                else:
+                    # === 新增：单进程动态 batch。 ===
+                    from tts.qwen_batch import scheduler as qwen_pool
+                    qwen_pool.ensure_started()
+            use_runner = qwen_pool is not None and (
+                getattr(qwen_pool, "kind", "") == "batch" or qwen_pool.window() > 1)
+            if use_runner:
+                inflight = []
+                while (backlog or inflight) and not cancelled:
+                    while backlog and len(inflight) < qwen_pool.window() and not cancel_ev.is_set():
+                        units = planner.take(backlog, play_clock.remain(tail=0.0), max_units=1)
+                        if not units:
+                            break
+                        sent = units[0]
+                        inflight.append((
+                            sent, sent_idx,
+                            qwen_pool.submit(sent, speaker, persona_obj, cancel_ev)))
+                        sent_idx += 1
+                    if not inflight:
+                        break
+                    sent, idx, fut = inflight.pop(0)
+                    try:
+                        await asyncio.wrap_future(fut)
+                    except Exception as e:
+                        log.warning("Qwen 并行句失败 idx=%s %s: %s", idx, type(e).__name__, e)
+                    if cancel_ev.is_set():
+                        cancelled = True
+                        break
                     pcm_before = len(pcm_buf)
-                    t_push = time.time()
                     seq, cancelled = await push_sentence_pcm(
                         None, fanout, sent, speaker, session_id, seq, cancel_ev,
-                        subtitle_text=sent, subtitle_index=sent_idx, on_pcm=on_pcm,
+                        subtitle_text=sent, subtitle_index=idx, on_pcm=on_pcm,
                         persona=persona_obj)
                     added = len(pcm_buf) - pcm_before
-                    measured.append((len(sent), added / bps, time.time() - t_push))
                     if added <= 0:
                         log.warning("句子无 PCM idx=%s persona=%s engine=%s err=%s text=%s",
-                                    sent_idx, pid, engine, tts._tts_last_error or "-", sent[:40])
+                                    idx, pid, engine, tts._tts_last_error or "-", sent[:40])
                     else:
                         any_pcm = True
-                    sent_idx += 1
                     if cancelled:
                         break
-                planner.observe_round(measured, batch_sec)
+            else:
+                while backlog and not cancelled:
+                    ahead = play_clock.remain(tail=0.0)
+                    if qwen:
+                        max_units = qwen_round_limit(any_pcm, QWEN_TTS_BATCH, len(backlog))
+                    else:
+                        max_units = 1
+                    units = planner.take(backlog, ahead, max_units=max_units)
+                    batch_sec = None
+                    if len(units) > 1 and not cancel_ev.is_set():
+                        t_pre = time.time()
+                        n_ok = await loop.run_in_executor(
+                            None, lambda texts=list(units): tts.prefetch_batch(
+                                texts, speaker, cancel_ev, persona=persona_obj))
+                        log.info("Qwen 批量预取 %s/%s 段 %.2fs ahead=%.2fs persona=%s",
+                                 n_ok, len(units), time.time() - t_pre, ahead, pid)
+                        if n_ok == len(units):
+                            batch_sec = time.time() - t_pre
+                    measured = []
+                    for sent in units:
+                        pcm_before = len(pcm_buf)
+                        t_push = time.time()
+                        seq, cancelled = await push_sentence_pcm(
+                            None, fanout, sent, speaker, session_id, seq, cancel_ev,
+                            subtitle_text=sent, subtitle_index=sent_idx, on_pcm=on_pcm,
+                            persona=persona_obj)
+                        added = len(pcm_buf) - pcm_before
+                        measured.append((len(sent), added / bps, time.time() - t_push))
+                        if added <= 0:
+                            log.warning("句子无 PCM idx=%s persona=%s engine=%s err=%s text=%s",
+                                        sent_idx, pid, engine, tts._tts_last_error or "-", sent[:40])
+                        else:
+                            any_pcm = True
+                        sent_idx += 1
+                        if cancelled:
+                            break
+                    planner.observe_round(measured, batch_sec)
             if engine == "qwen3" and not any_pcm and not skip_reason:
                 skip_reason = "qwen_empty"
         else:

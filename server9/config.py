@@ -169,22 +169,64 @@ def _env_int(name: str, default: int) -> int:
 # 按逗号一句一调，固定开销会把句间空档拉长。这里把相邻小句拼到这个字数再合成。
 # 0 = 回到逐小句合成（CosyVoice2 流式不受影响，始终逐小句）。
 TTS_MERGE_CHARS = max(0, _env_int("TTS_MERGE_CHARS", 40))
-# Qwen3-TTS 相邻小句最多拼到这个字数。0 = 不拼句。环境变量 QWEN_TTS_MERGE_CHARS 可覆盖。
-QWEN_TTS_MERGE_CHARS = max(0, _env_int("QWEN_TTS_MERGE_CHARS", 5))
-# 0 = 不按字数硬切。Qwen 只在标点和书名号右界断开。环境变量可改回正数做字数硬切。
+# Qwen3-TTS 按标点切句后不再把相邻小句粘回去。0 = 不拼句。
+QWEN_TTS_MERGE_CHARS = max(0, _env_int("QWEN_TTS_MERGE_CHARS", 0))
+# 0 = 不按字数硬切。Qwen 只在标点断开，书名号里面的标点不切。
 QWEN_TTS_SPLIT_CHARS = max(0, _env_int("QWEN_TTS_SPLIT_CHARS", 0))
 # 整句合成的头尾静音只留这么多毫秒，句与句之间不再叠两段留白。0 = 不裁。
 TTS_TRIM_HEAD_MS = max(0, _env_int("TTS_TRIM_HEAD_MS", 40))
 TTS_TRIM_TAIL_MS = max(0, _env_int("TTS_TRIM_TAIL_MS", 160))
-# Qwen3-TTS 一次 generate 并行合成的段数。12GB 卡上 8 段会把空闲显存打到 2GB 以下，
-# 批结束触发 empty_cache，下一批还要重新分配。6 段足够把 RTF 压到 1 以下。
-QWEN_TTS_BATCH = max(1, _env_int("QWEN_TTS_BATCH", 6))
-# 游客问答边生成边送句。凑满这么多句，或最多再等这么多毫秒，再开算。
-# 避免第一句单独合成、后面的句子进不了这一批。0 毫秒 = 不等。
-QWEN_TTS_COALESCE_UNITS = max(1, _env_int("QWEN_TTS_COALESCE_UNITS", 4))
-QWEN_TTS_COALESCE_MS = max(0, _env_int("QWEN_TTS_COALESCE_MS", 800))
-# 首句等到句号、问号、叹号，或最多再等这么多毫秒。标点还没到也可以先出，避免一直不开声。
-QWEN_TTS_FIRST_MS = max(0, _env_int("QWEN_TTS_FIRST_MS", 3000))
+# 一次 generate 的句数。默认 1：一句一算，不把几句攒成一批再出声。
+# 首句文本一到就开算。句与句之间靠单句加速，不靠批次把第一声拖住。
+QWEN_TTS_BATCH = max(1, _env_int("QWEN_TTS_BATCH", 1))
+# 1 = talker 和 code predictor 都贪心。少掉每帧 15 步采样，短句也更早碰到结束符。
+QWEN_TTS_GREEDY = os.environ.get("QWEN_TTS_GREEDY", "1").strip().lower() in {"1", "true", "yes"}
+# 1 = 编译 code predictor。需要本机已装 Triton，否则会加载失败并退回未编译模型。
+QWEN_TTS_COMPILE = os.environ.get("QWEN_TTS_COMPILE", "1").strip().lower() in {"1", "true", "yes"}
+# 同时合成的路数。1 路用主进程里的模型，其余路各开一个子进程。播报仍按原句序。
+QWEN_TTS_WORKERS = max(1, _env_int("QWEN_TTS_WORKERS", 3))
+# 凑满这么多句，或最多再等这么多毫秒，再开算。默认不等，标点一到就合成。
+QWEN_TTS_COALESCE_UNITS = max(1, _env_int("QWEN_TTS_COALESCE_UNITS", 1))
+QWEN_TTS_COALESCE_MS = max(0, _env_int("QWEN_TTS_COALESCE_MS", 0))
+# 首句再等多久才开声。默认 0：第一个小句一到就合成。设成正数才会等句号。
+QWEN_TTS_FIRST_MS = max(0, _env_int("QWEN_TTS_FIRST_MS", 0))
+# === 新增：单进程动态 batch。默认 batch，不要把多进程池当默认。 ===
+# batch = 本进程里最多 3 句一次 generate。procs = 旧的 qwen_pool 多进程，只给对比压测。
+# 后续若要测「2 进程、每进程 batch=2」：QWEN_TTS_SCHED=procs、QWEN_TTS_WORKERS=2，
+# 再把各进程的 QWEN_TTS_BATCH 调到 2。默认启动不会拉起那些子进程。
+_QWEN_TTS_SCHED = (os.environ.get("QWEN_TTS_SCHED") or "batch").strip().lower()
+QWEN_TTS_SCHED = _QWEN_TTS_SCHED if _QWEN_TTS_SCHED in {"batch", "procs"} else "batch"
+# 一次 generate 最多几句。硬顶 3。显存紧、或 batch>1 在 RoPE/mask 上不稳时改回 1。
+# 吞吐不够且单句显存有余，再保持 3。不要超过 3。
+QWEN_TTS_BATCH_MAX = max(1, min(3, _env_int("QWEN_TTS_BATCH_MAX", 3)))
+# 队里已有句子就开算。不够 3 句时最多再等这么多毫秒，到点就走，不空等满批。
+# 0 = 完全不等。8 只接住同一轮已经进队的下一句。不要设到几十毫秒以上，首包会被拖住。
+QWEN_TTS_BATCH_WAIT_MS = max(0, _env_int("QWEN_TTS_BATCH_WAIT_MS", 8))
+# 主码本静音码，逗号分隔。默认空：一个码本都不算静音。
+# 当前 generate_voice_clone 不把逐 token main_code 交出来，空集时 guard 不会误伤波形。
+# 确认静音码后再填，例如 QWEN_TTS_SILENCE_CODES=2154,2155。
+# 不要把 codec EOS（库默认 4198）填进来，原生 EOS 另走。
+# 只填「纯静音帧」。呼吸、气口填进来会把句尾提前截掉。
+def _env_code_set(name: str):
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return frozenset()
+    found = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            found.add(int(part))
+        except ValueError:
+            continue
+    return frozenset(found)
+
+
+SILENCE_CODES = _env_code_set("QWEN_TTS_SILENCE_CODES")
+# 连续静音帧达到这个数才强制 EOS。12Hz 下 8 帧约 0.67 秒，12 帧约 1 秒。
+# 误切尾音就加大到 12~18；句尾拖很长静音再减小到 6~8。不要低于 2。
+MAX_CONT_SILENCE = max(2, _env_int("QWEN_TTS_MAX_CONT_SILENCE", 8))
 # 1 = CosyVoice 的 Flow 走 TensorRT（需装 tensorrt，首次会编译 plan 几分钟）。失败自动退回 PyTorch。
 COSYVOICE_LOAD_TRT = os.environ.get("COSYVOICE_LOAD_TRT", "0").strip().lower() in {"1", "true", "yes"}
 

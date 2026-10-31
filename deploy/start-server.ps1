@@ -37,14 +37,16 @@ function Test-Port8848 {
 }
 
 function Find-RobotPython {
-    $script = Join-Path $PSScriptRoot "server-env.ps1"
-    $log = Join-Path $env:TEMP "digital-human-server-env.log"
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -Action ensure > $log 2>&1
-    $code = $LASTEXITCODE
-    if (Test-Path $log) { Get-Content -Path $log | Out-Host }
-    if ($code -ne 0) { return $null }
-    $py = Join-Path $env:USERPROFILE ".conda\envs\digital_human_server\python.exe"
-    if (Test-Path $py) { return $py }
+    # 环境 digital_human_server 已安装且经手动验证可用，无需每次开机重跑
+    # server-env.ps1（它 import torch 会打印 NOTE，5.1 在 Stop 下当错误抛出，
+    # 导致开机任务 8848 起不来）。直接检测固定路径。
+    $candidates = @(
+        (Join-Path $env:USERPROFILE ".conda\envs\digital_human_server\python.exe"),
+        "D:\anaconda\envs\digital_human_server\python.exe"
+    )
+    foreach ($path in $candidates) {
+        if ($path -and (Test-Path $path)) { return $path }
+    }
     return $null
 }
 
@@ -69,6 +71,7 @@ try {
     if (-not $env:COSYVOICE_PATH) {
         foreach ($c in @(
             (Join-Path $Root "CosyVoice"),
+            "D:\projects\CosyVoice",
             "E:\projects\Robot_Intelligent_Voice_System\CosyVoice",
             "C:\ro\CosyVoice"
         )) {
@@ -124,6 +127,9 @@ try {
     if ($ttsEngine -eq "qwen3" -and -not $env:QWEN_TTS_MODEL) {
         $env:QWEN_TTS_MODEL = Join-Path $Root "models\Qwen3-TTS-12Hz-0.6B-Base"
     }
+    if ($ttsEngine -eq "qwen3" -and $env:TTS_QWEN_URL) {
+        Write-Boot ("TTS_QWEN_URL=" + $env:TTS_QWEN_URL + " 已设置，讲解员将使用这个地址而不是默认的 8812")
+    }
 
     $Python = Find-RobotPython
     if (-not $Python) {
@@ -149,19 +155,23 @@ try {
     Write-Boot ("cosyvoice_path=" + $env:COSYVOICE_PATH)
     Write-Boot ("cosyvoice=" + $choice + " model=" + $env:COSYVOICE_MODEL)
     if ($env:TTS_ENGINE -eq "qwen3") {
-        Write-Boot ("qwen3=" + $env:QWEN_TTS_MODEL)
+        $directTts = if ($env:TTS_QWEN_URL) { $env:TTS_QWEN_URL } else { "http://127.0.0.1:8812" }
+        Write-Boot ("qwen3=" + $env:QWEN_TTS_MODEL + " tts_url=" + $directTts)
     }
 
     Set-Location $Root
     Add-Content -Path $outLog -Value ("`r`n==== " + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + " start ====`r`n")
     Write-Boot ("starting uvicorn log=" + $outLog)
 
-    # cmd redirect captures native python stdout; parent stays alive for Task Scheduler.
-    $line = " -m uvicorn app:app --host 0.0.0.0 --port 8848 --log-level info"
-    cmd.exe /c "`"$Python`"$line >> `"$outLog`" 2>&1"
-    $code = $LASTEXITCODE
-    Write-Boot ("uvicorn exit=" + $code)
-    exit $code
+    # 用 Start-Process 独立后台拉起 uvicorn，避免 5.1 把 python/torch 的 stderr
+    # 当作 NativeCommandError 而抛错（cmd /c 阻塞方式在开机场景下会因 torch 的
+    # redirects NOTE 触发 $ErrorActionPreference=Stop 直接退出，导致 8848 起不来）。
+    $p = Start-Process -FilePath $Python `
+        -ArgumentList @("-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8848", "--log-level", "info") `
+        -WorkingDirectory $Root -WindowStyle Hidden `
+        -RedirectStandardOutput $outLog -RedirectStandardError ($outLog + ".err") -PassThru
+    Write-Boot ("uvicorn started pid=" + $p.Id)
+    exit 0
 } catch {
     Write-Boot ("ERROR: " + $_.Exception.Message)
     throw

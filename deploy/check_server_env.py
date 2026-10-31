@@ -9,7 +9,9 @@ PINS = {
     "transformers": "4.57.3",
     "qwen-tts": "0.1.1",
     "numpy": "1.26.4",
-    "llama-cpp-python": "0.3.36",
+    # PyPI 全平台只有 sdist（无 wheel），Windows 用 conda-forge 预编译包
+    "llama-cpp-python": "0.3.35",
+    "websockets": "14.1",
     "onnxruntime": "1.18.0",
     "faiss-cpu": "1.15.0",
     "sentence-transformers": "6.0.1",

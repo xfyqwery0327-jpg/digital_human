@@ -280,7 +280,10 @@ class TTSEngine:
         _assert_cuda(core.llm)
         _assert_cuda(core.flow)
         _assert_cuda(core.hift)
-        self.weight_mb = _nbytes(core) / (1024 * 1024)
+        # CosyVoice3Model 本身不是 nn.Module，没有 parameters()。
+        self.weight_mb = (
+            _nbytes(core.llm) + _nbytes(core.flow) + _nbytes(core.hift)
+        ) / (1024 * 1024)
         log(
             f"[TTS] 权重大小 {self.weight_mb:.0f} MiB dtype={self.dtype_name} int8={self.int8} "
             f"sr={self.sample_rate}"
@@ -363,8 +366,12 @@ class TTSEngine:
         if int(wav.shape[-1]) > max_n:
             log(f"[TTS] 参考音超过 10 秒，只取前 10 秒 speaker={speaker_id}")
             wav = wav[..., :max_n]
-        import torchaudio
-        torchaudio.save(str(dest), wav, int(sr))
+        import numpy as np
+        import soundfile as sf
+        audio = wav.detach().float().cpu().numpy()
+        if audio.ndim == 2:
+            audio = audio.mean(axis=0) if audio.shape[0] > 1 else audio[0]
+        sf.write(str(dest), np.ascontiguousarray(audio), int(sr))
         return str(dest)
 
     def register_speaker(self, speaker_id: str, wav_path: str, prompt_text: str) -> None:
@@ -458,8 +465,12 @@ class TTSEngine:
         text_token, text_len = frontend._extract_text_token(piece)
         flow_tok = info.get("flow_prompt_speech_token")
         feat = info.get("prompt_speech_feat")
-        llm_emb = info.get("llm_embedding") or info.get("embedding")
-        flow_emb = info.get("flow_embedding") or llm_emb
+        llm_emb = info.get("llm_embedding")
+        if llm_emb is None:
+            llm_emb = info.get("embedding")
+        flow_emb = info.get("flow_embedding")
+        if flow_emb is None:
+            flow_emb = llm_emb
         if flow_tok is None or feat is None or llm_emb is None or flow_emb is None:
             raise RuntimeError(f"音色 {speaker_id} 条件不完整")
         # 每次新建空 prompt。tts() 的默认张量是可变对象，复用会串上一句。

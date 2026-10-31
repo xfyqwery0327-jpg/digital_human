@@ -30,7 +30,10 @@ from rag.scope import (
     iter_hall_history, refuse_text,
 )
 from rag.visit import visit_hint, guard_hall_clock
-from rag.dialogue import note_realtime, realtime_reply, rule_intent, RealtimeMemory
+from rag.dialogue import (
+    note_realtime, realtime_reply, rule_intent, RealtimeMemory,
+    is_noise_question, is_relation_question, is_family_question, family_reply,
+)
 from services.local_feed import feed_bundle
 from services.screen_hooks import (
     is_ticket_booking, booking_reply, ticket_form_event, request_ticket_form,
@@ -73,6 +76,16 @@ def _robot_knowledge_turn_locked(question: str, session: SessionState, top_k: in
     if is_other_exhibition_query(question, persona):
         log.info("问的是其他展会，拒答并拉回本届 query=%s", question[:80])
         return refuse_payload("other_exhibition", persona)
+    if is_noise_question(question) or is_relation_question(question):
+        log.info("闲句或认人问题，不叫大模型 query=%s", question[:80])
+        return refuse_payload("aside", persona)
+    if is_family_question(question):
+        fact = family_reply(question, persona=persona)
+        if not fact:
+            log.info("家庭问题资料里没有原句 query=%s", question[:80])
+            return refuse_payload("family", persona)
+        log.info("家庭问题用资料原句 query=%s", question[:80])
+        return {"text": fact, "sources": [], "refused": False}
 
     hits = search(question, top_k, cat, session, persona=persona)
     threshold = MIN_SCORE_RERANK if rag.HAS_RERANKER else MIN_SCORE_RRF
