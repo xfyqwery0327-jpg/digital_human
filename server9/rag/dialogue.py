@@ -36,6 +36,7 @@ _NAME_HOOK = {
     "monet": "想再看看%s吗？",
     "fuhao": "想再看看%s吗？",
     "kumarajiva": "想再听听%s吗？",
+    "archimedes": "想再聊聊%s吗？",
 }
 
 

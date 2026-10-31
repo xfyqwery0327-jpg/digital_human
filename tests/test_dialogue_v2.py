@@ -77,6 +77,14 @@ def test_fuhao_and_kumarajiva_hooks_match_their_halls():
             "weather": "译经",
             "name": "舍利盒",
         },
+        "archimedes": {
+            "exhibit": "杠杆",
+            "person": "叙拉古",
+            "visit": "科协",
+            "chitchat": "杠杆",
+            "weather": "杠杆",
+            "name": "圆周率",
+        },
     }
     for pid, tokens in expect.items():
         persona = _persona(pid)

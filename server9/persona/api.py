@@ -34,7 +34,7 @@ def api_persona_current():
 
 
 class SwitchReq(BaseModel):
-    persona_id: str = Field(..., description="目标数字人 id，如 monet / fuhao / kumarajiva")
+    persona_id: str = Field(..., description="目标数字人 id，如 monet / fuhao / kumarajiva / archimedes")
     play_hello: bool = False
     reason: str = "api"
 
