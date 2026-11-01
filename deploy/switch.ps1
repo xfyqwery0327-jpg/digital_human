@@ -1,9 +1,10 @@
 ﻿# 数字讲解员开关。由项目根目录 switch.bat 调用。
-# 开机任务读 deploy\last-start.txt：llm=4|8，tts=cosyvoice|qwen3，cosyvoice=2|3。
-# 改用语音只写配置。要换上正在跑的讲解员，再执行 restart，只动 8848。
+# 开机任务读 deploy\last-start.txt 的 llm=4|8。
+# 语音固定为独立服务 qwen-tts-service，默认 http://127.0.0.1:8812。
+# 进程内 Qwen3-TTS、SGLang WebSocket、CosyVoice 不再切换，启动时也不再选。
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("on", "off", "status", "saved", "llm", "cv", "tts", "restart")]
+    [ValidateSet("on", "off", "status", "saved", "llm", "restart")]
     [string]$Action,
     [string]$Which = ""
 )
@@ -92,14 +93,11 @@ function Normalize-Tts([string]$raw) {
 }
 
 function Get-SavedTts {
-    $tag = Normalize-Tts (Read-LastKey "tts")
-    if ($tag) { return $tag }
-    return "cosyvoice"
+    return "qwen-service"
 }
 
 function Voice-Title([string]$tts, [string]$cv) {
-    if ($tts -eq "qwen3") { return "Qwen3-TTS" }
-    return (Cv-Title $cv)
+    return "qwen-tts-service http://127.0.0.1:8812"
 }
 
 function Get-QwenDir {
@@ -140,7 +138,7 @@ function Update-LlamaCfg([string]$modelPath) {
 }
 
 function Save-Choice([string]$llm, [string]$cv, [string]$tts = "") {
-    if (-not $tts) { $tts = Get-SavedTts }
+    $tts = "qwen-service"
     Set-Content -Path $LlmMarker -Value ($llm + "`r`n") -Encoding ascii
     Set-Content -Path $CvMarker -Value ($cv + "`r`n") -Encoding ascii
     $stamp = Get-Date -Format "yyyy-MM-ddTHH:mm:ss"
@@ -387,7 +385,7 @@ function Show-Status {
             Write-Host "还没用 switch.bat 启动过。开机先按上面这份默认配置。"
         }
     } else {
-        Write-Host "还没有 switch.bat 启动记录，开机按 8B + CosyVoice3"
+        Write-Host "还没有 switch.bat 启动记录，开机按 8B，语音走 qwen-tts-service"
     }
     Write-Host "讲解模型文件:"
     foreach ($tag in @("4", "8")) {
@@ -399,20 +397,8 @@ function Show-Status {
             Write-Host ("  " + (Llm-Title $tag) + "  文件不在  " + $path)
         }
     }
-    $cvDir = Get-CvDir $cv
-    Write-Host ("CosyVoice 目录: " + $cvDir)
-    Write-Host ("  存在: " + (Test-Path $cvDir))
-    $qwenDir = Get-QwenDir
-    $qwenWeight = Join-Path $qwenDir "model.safetensors"
-    $qwenAlias = Join-Path $qwenDir "model.safetensors_"
-    Write-Host ("Qwen3-TTS 目录: " + $qwenDir)
-    if (Test-Path $qwenWeight) {
-        Write-Host "  权重: model.safetensors"
-    } elseif (Test-Path $qwenAlias) {
-        Write-Host "  权重文件名是 model.safetensors_，首次加载会改成 model.safetensors"
-    } else {
-        Write-Host "  没有模型权重"
-    }
+    Write-Host "语音：qwen-tts-service http://127.0.0.1:8812"
+    Write-Host "进程内 Qwen3-TTS、SGLang WebSocket、CosyVoice 已停用，启动时不会再选。"
     $running = Get-LlmRunningTag
     $pids8080 = @($(Get-ListenPids 8080))
     if ($pids8080.Count -eq 0) {
@@ -427,6 +413,12 @@ function Show-Status {
         Write-Host "8848 讲解员：没在听"
     } else {
         Write-Host ("8848 讲解员：在听  PID " + ($pids8848 -join ","))
+    }
+    $pids8812 = @($(Get-ListenPids 8812))
+    if ($pids8812.Count -eq 0) {
+        Write-Host "8812 qwen-tts-service：没在听"
+    } else {
+        Write-Host ("8812 qwen-tts-service：在听  PID " + ($pids8812 -join ","))
     }
     foreach ($name in @("DigitalHumanLLM", "DigitalHuman")) {
         try {
@@ -492,33 +484,11 @@ try {
         Show-LogTail (Join-Path $Root "logs\llama.out.log")
         exit 1
     }
-    if ($Action -eq "cv") {
-        $tag = Normalize-Cv $Which
-        if (-not $tag) { throw "请指定 2 或 3。例如：switch.bat cv 3" }
-        Assert-CvDir $tag | Out-Null
-        $llm = Get-SavedLlm
-        Assert-LlmFile $llm | Out-Null
-        Save-Choice $llm $tag "cosyvoice"
-        Write-Host ("已改用 " + (Cv-Title $tag) + "。正在跑的 8848 不会自己换。")
-        exit 0
-    }
-    if ($Action -eq "tts") {
-        $tag = Normalize-Tts $Which
-        if (-not $tag) { throw "请指定 qwen 或 cv。例如：switch.bat tts qwen" }
-        $llm = Get-SavedLlm
-        $cv = Get-SavedCv
-        Assert-LlmFile $llm | Out-Null
-        Assert-Voice $tag $cv | Out-Null
-        Save-Choice $llm $cv $tag
-        Write-Host ("已改用 " + (Voice-Title $tag $cv) + "。正在跑的 8848 不会自己换。")
-        exit 0
-    }
     if ($Action -eq "restart") {
         $llm = Get-SavedLlm
         $cv = Get-SavedCv
         $tts = Get-SavedTts
         Assert-LlmFile $llm | Out-Null
-        Assert-Voice $tts $cv | Out-Null
         Write-Host ("重启讲解员，语音 " + (Voice-Title $tts $cv) + "。8080 不动。")
         Stop-Narrator
         Start-NarratorNow
@@ -536,7 +506,6 @@ try {
         $cv = Get-SavedCv
         $tts = Get-SavedTts
         Assert-LlmFile $llm | Out-Null
-        Assert-Voice $tts $cv | Out-Null
         Save-Choice $llm $cv
         $needLlm = $true
         $running = Get-LlmRunningTag
@@ -551,7 +520,7 @@ try {
         }
         $needCv = $true
         if (@($(Get-ListenPids 8848)).Count -gt 0) {
-            Write-Host "8848 已在听，没有重启讲解员。改用语音后要生效，请再选重启。"
+            Write-Host "8848 已在听，没有重启讲解员。要换上当前配置，请再选重启。"
             $needCv = $false
         } else {
             Start-NarratorNow

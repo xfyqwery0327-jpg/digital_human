@@ -1,4 +1,10 @@
+@chcp 65001 >nul
 @echo off
+if /i "%~1"=="__cp__" goto args_ready
+cmd /c ""%~f0" __cp__ %*"
+exit /b %ERRORLEVEL%
+:args_ready
+shift
 setlocal EnableExtensions
 cd /d "%~dp0"
 set "RC=0"
@@ -15,22 +21,22 @@ if "%~1"=="2" goto off
 if "%~1"=="3" goto status
 if "%~1"=="4" goto llm4
 if "%~1"=="5" goto llm8
-if "%~1"=="6" goto cv3
-if "%~1"=="7" goto cv2
-if "%~1"=="8" goto ttsqwen
+if "%~1"=="6" goto restart
 if "%~1"=="9" goto restart
 if /I "%~1"=="4b" goto llm4
 if /I "%~1"=="8b" goto llm8
 if /I "%~1"=="llm" goto llmarg
-if /I "%~1"=="cv" goto cvarg
-if /I "%~1"=="cv2" goto cv2
-if /I "%~1"=="cv3" goto cv3
-if /I "%~1"=="cosyvoice2" goto cv2
-if /I "%~1"=="cosyvoice3" goto cv3
-if /I "%~1"=="tts" goto ttsarg
-if /I "%~1"=="qwen" goto ttsqwen
-if /I "%~1"=="qwen3" goto ttsqwen
-echo Î´Öª²ÎÊı£º%~1
+if /I "%~1"=="7" goto retired
+if /I "%~1"=="8" goto retired
+if /I "%~1"=="cv" goto retired
+if /I "%~1"=="cv2" goto retired
+if /I "%~1"=="cv3" goto retired
+if /I "%~1"=="cosyvoice2" goto retired
+if /I "%~1"=="cosyvoice3" goto retired
+if /I "%~1"=="tts" goto retired
+if /I "%~1"=="qwen" goto retired
+if /I "%~1"=="qwen3" goto retired
+echo æœªçŸ¥å‚æ•°ï¼š%~1
 echo.
 set "RC=1"
 goto showhelp
@@ -40,21 +46,16 @@ set "FROM_MENU=1"
 echo.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0deploy\switch.ps1" -Action saved
 echo.
-echo 1 ¿ªÆô  °´ÉÏ´ÎÅäÖÃÆô¶¯½²½âÄ£ĞÍ 8080 ºÍ½²½âÔ± 8848
-echo 2 ¹Ø±Õ
-echo 3 ×´Ì¬
-echo 4 ¸ÄÓÃ Qwen3-4B£¬²¢Æô¶¯½²½âÄ£ĞÍ
-echo 5 ¸ÄÓÃ Qwen3-8B£¬²¢Æô¶¯½²½âÄ£ĞÍ
-echo 6 ¸ÄÓÃ CosyVoice3
-echo 7 ¸ÄÓÃ CosyVoice2
-echo 8 ¸ÄÓÃ Qwen3-TTS
-echo 9 ÖØÆô½²½âÔ±
-echo ¸ÄÓÃÓïÒôÖ»Ğ´ÅäÖÃ£¬²»»áÖØÆô¡£Òª»»ÉÏÕıÔÚÅÜµÄ½²½âÔ±£¬ÔÙÑ¡ 9¡£
-choice /C 123456789 /N /M "ÇëÑ¡Ôñ:"
-if errorlevel 9 goto restart
-if errorlevel 8 goto ttsqwen
-if errorlevel 7 goto cv2
-if errorlevel 6 goto cv3
+echo 1 å¼€å¯  æŒ‰ä¸Šæ¬¡çš„è®²è§£æ¨¡å‹å¯åŠ¨ 8080 å’Œè®²è§£å‘˜ 8848
+echo 2 å…³é—­
+echo 3 çŠ¶æ€
+echo 4 æ”¹ç”¨ Qwen3-4Bï¼Œå¹¶å¯åŠ¨è®²è§£æ¨¡å‹
+echo 5 æ”¹ç”¨ Qwen3-8Bï¼Œå¹¶å¯åŠ¨è®²è§£æ¨¡å‹
+echo 6 é‡å¯è®²è§£å‘˜
+echo è¯­éŸ³å›ºå®šèµ° qwen-tts-serviceï¼Œåœ°å€ http://127.0.0.1:8812ã€‚
+echo è¿›ç¨‹å†… Qwen3-TTSã€SGLang WebSocketã€CosyVoice ä¸å†åˆ‡æ¢ã€‚
+choice /C 123456 /N /M "è¯·é€‰æ‹©:"
+if errorlevel 6 goto restart
 if errorlevel 5 goto llm8
 if errorlevel 4 goto llm4
 if errorlevel 3 goto status
@@ -66,17 +67,26 @@ set "RC=0"
 goto showhelp
 
 :showhelp
-echo ÓÃ·¨£º
-echo   switch.bat              ²Ëµ¥
+echo ç”¨æ³•ï¼š
+echo   switch.bat              èœå•
 echo   switch.bat on ^| off ^| status ^| restart
 echo   switch.bat llm 4 ^| llm 8
-echo   switch.bat cv 3 ^| cv 2
-echo   switch.bat tts qwen ^| tts cv
-echo Í¬Ò»Ê±¼äÖ»¿ªÒ»¸ö½²½âÄ£ĞÍ¡£4 ÊÇ Qwen3-4B£¬8 ÊÇ Qwen3-8B¡£
-echo 6 »ò cv 3 ¸ÄÓÃ CosyVoice3£¬7 »ò cv 2 ¸ÄÓÃ CosyVoice2£¬8 »ò tts qwen ¸ÄÓÃ Qwen3-TTS¡£
-echo ¸ÄÓÃÖ»¼ÇÏÂÅäÖÃ¡£9 »ò restart ²ÅÖØÆô½²½âÔ±£¬Ö»¶¯ 8848£¬²»¶¯ 8080¡£
-echo Êı×Ö 2 ÊÇ¹Ø±Õ£¬²»ÊÇ CosyVoice2¡£
-echo ¿ª»ú×ÔÆô¶Á deploy\last-start.txt£¬ÒÔ×îºóÒ»´ÎÕâÀïÆô¶¯µÄÅäÖÃÎª×¼¡£
+echo   switch.bat 4b ^| 8b
+echo åŒä¸€æ—¶é—´åªå¼€ä¸€ä¸ªè®²è§£æ¨¡å‹ã€‚
+echo 4 æˆ– llm 4 æ˜¯ Qwen3-4Bï¼Œæ–‡ä»¶ models\Qwen3-4B-Instruct-2507-Q4_K_M.ggufã€‚
+echo 5 æˆ– llm 8 æ˜¯ Qwen3-8Bï¼Œæ–‡ä»¶ models\Qwen3-8B-Q4_K_M.ggufã€‚
+echo è¯­éŸ³å›ºå®šèµ°ç‹¬ç«‹æœåŠ¡ qwen-tts-serviceï¼Œåœ°å€ http://127.0.0.1:8812ã€‚
+echo è¿›ç¨‹å†… Qwen3-TTSã€SGLang WebSocketã€CosyVoice å·²åœç”¨ï¼Œèœå•é‡Œä¸èƒ½å†é€‰ã€‚
+echo 6ã€restartã€9 é‡å¯è®²è§£å‘˜ï¼ŒåªåŠ¨ 8848ï¼Œä¸åŠ¨ 8080ã€‚
+echo æ•°å­— 2 æ˜¯å…³é—­ã€‚æ•°å­— 4 å’Œ 5 æ‰æ˜¯è®²è§£æ¨¡å‹ã€‚
+echo å¼€æœºè‡ªå¯è¯» deploy\last-start.txt é‡Œçš„è®²è§£æ¨¡å‹ã€‚è¯­éŸ³ä¸å†è·Ÿç€æ—§è®°å½•åˆ‡æ¢ã€‚
+goto finish
+
+:retired
+echo è¿›ç¨‹å†… Qwen3-TTSã€SGLang WebSocketã€CosyVoice å·²ç»åœç”¨ã€‚
+echo è®²è§£å‘˜å›ºå®šèµ° qwen-tts-serviceï¼Œåœ°å€ http://127.0.0.1:8812ã€‚
+echo è¿™é‡Œåªåˆ‡æ¢è®²è§£æ¨¡å‹ Qwen3-4B æˆ– Qwen3-8Bã€‚
+set "RC=1"
 goto finish
 
 :on
@@ -109,33 +119,8 @@ set "ACT=llm"
 set "WHICH=8"
 goto run
 
-:cv3
-set "ACT=cv"
-set "WHICH=3"
-goto run
-
-:cv2
-set "ACT=cv"
-set "WHICH=2"
-goto run
-
-:ttsqwen
-set "ACT=tts"
-set "WHICH=qwen"
-goto run
-
 :llmarg
 set "ACT=llm"
-set "WHICH=%~2"
-goto run
-
-:cvarg
-set "ACT=cv"
-set "WHICH=%~2"
-goto run
-
-:ttsarg
-set "ACT=tts"
 set "WHICH=%~2"
 goto run
 

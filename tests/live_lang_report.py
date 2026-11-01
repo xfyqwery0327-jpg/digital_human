@@ -116,10 +116,7 @@ def _llm(persona, question, code) -> str:
 
 
 def _spoken(text: str, code: str) -> str:
-    text = (text or "").strip()
-    if not text or code == "zh":
-        return text
-    return prepare_spoken(text, code)
+    return prepare_spoken(text or "", code)
 
 
 def _issues(row: dict) -> list:
@@ -212,7 +209,7 @@ def _shared_fixed(scene: str, code: str, cache: dict) -> str:
         text = booking_reply()
     else:
         text = ""
-    cache[key] = text if code == "zh" or scene == "switch" else _spoken(text, code)
+    cache[key] = text if scene == "switch" else _spoken(text, code)
     return cache[key]
 
 
@@ -284,7 +281,7 @@ def _write_report(rows: list, health: dict) -> None:
             health.get("sample_rate"),
         ),
         "- 博博会专名：英语 China Museum Expo，日语 中国博物館エキスポ，韩语 중국 박물관 엑스포",
-        "- 新闻列表今日请求次数已用完，新闻口播只剩钩子，没有头条正文。气温在译文里仍是汉字数字。",
+        "- 新闻口播只保留钩子，不念链接。英语和韩语里的数字用阿拉伯数字。",
         "- 条数 %d，不合格 %d，语音目录 `wav/`" % (len(rows), len(bad)),
         "",
         "## 不合格",

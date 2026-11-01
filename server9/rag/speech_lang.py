@@ -65,11 +65,28 @@ def confirm_text(code: str) -> str:
     return LANGS.get(code, LANGS["zh"])["confirm"]
 
 
-_PROPER = {
-    "en": "博博会是专名，必须写成 China Museum Expo，不要写成博博会。宽创国际写成 Kuanchuang。句号用英文句点，逗号用英文逗号。",
-    "ja": "博博会是专名，必须写成中国博物館エキスポ，不要写成博博会。句号用。，停顿用、。",
-    "ko": "博博会是专名，必须写成중국 박물관 엑스포，不要写成博博会，整段不要出现汉字。句号用英文句点，逗号用英文逗号。",
+_NAME = {
+    "zh": "博博会",
+    "en": "China Museum Expo",
+    "ja": "中国博物館エキスポ",
+    "ko": "중국 박물관 엑스포",
 }
+_PROPER = {
+    "en": "博博会是专名，必须写成 China Museum Expo，不要写成博博会。宽创国际写成 Kuanchuang。数字用阿拉伯数字。句号用英文句点，逗号用英文逗号。",
+    "ja": "博博会是专名，必须写成中国博物館エキスポ，不要写成博博会。句号用。，停顿用、。",
+    "ko": "博博会是专名，必须写成중국 박물관 엑스포，不要写成博博会，整段不要出现汉字。数字用阿拉伯数字。句号用英文句点，逗号用英文逗号。",
+}
+_GLUE = {
+    "en": {"以后": "after"},
+    "ko": {"以后": "이후", "金刚经": "금강경", "金刚": "금강", "法华经": "법화경"},
+    "ja": {"介绍": "紹介"},
+}
+_DIG = {
+    "零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3,
+    "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
+}
+_NUM = set("零〇一二两三四五六七八九十百千万亿")
+_THINK = re.compile(r"<think>.*?</think>|<reasoning>.*?</reasoning>|/no_think\b|</?think>|</?reasoning>", re.I | re.S)
 
 
 def output_rule(code: str) -> str:
@@ -118,16 +135,140 @@ def qwen_language_of(text: str, code: str = "") -> str:
     return item["qwen"] if item else "Auto"
 
 
+def _cn_to_int(token: str) -> int:
+    """十四 → 14，二零二六 → 2026，二千零二十六 → 2026。"""
+    if not any(ch in "十百千万亿" for ch in token):
+        return int("".join(str(_DIG[ch]) for ch in token))
+    total = 0
+    section = 0
+    number = 0
+    for ch in token:
+        if ch in _DIG:
+            number = _DIG[ch]
+            continue
+        unit = {"十": 10, "百": 100, "千": 1000}.get(ch)
+        if unit:
+            section += (number or 1) * unit
+            number = 0
+            continue
+        scale = 10000 if ch == "万" else 100000000
+        total += (section + number) * scale
+        section = 0
+        number = 0
+    return total + section + number
+
+
+def _convert_cn_numbers(text: str) -> str:
+    """只改成段的汉字数字。单独一个「一」不动。"""
+    out = []
+    i = 0
+    raw = text or ""
+    while i < len(raw):
+        if raw[i] not in _NUM:
+            out.append(raw[i])
+            i += 1
+            continue
+        j = i + 1
+        while j < len(raw) and raw[j] in _NUM:
+            j += 1
+        token = raw[i:j]
+        use = any(ch in "十百千万亿" for ch in token) or (
+            len(token) >= 2 and all(ch in _DIG for ch in token)
+        )
+        out.append(str(_cn_to_int(token)) if use else token)
+        i = j
+    return "".join(out)
+
+
+def _ordinals(text: str, code: str) -> str:
+    def _en(match):
+        n = match.group(1)
+        if n.endswith("1") and not n.endswith("11"):
+            suf = "st"
+        elif n.endswith("2") and not n.endswith("12"):
+            suf = "nd"
+        elif n.endswith("3") and not n.endswith("13"):
+            suf = "rd"
+        else:
+            suf = "th"
+        return n + suf
+
+    if code == "en":
+        return re.sub(r"第(\d+)(?:届|回)", _en, text)
+    if code == "ko":
+        return re.sub(r"第(\d+)(?:届|回)", r"제\1회", text)
+    return text
+
+
+def _normalize_expo(text: str, code: str) -> str:
+    name = _NAME.get(code) or ""
+    if not name or name in (text or ""):
+        return text or ""
+    if code == "ko":
+        return re.sub(r"(?<!중국 )박물관\s*엑스포", name, text)
+    if code == "en":
+        return re.sub(r"\b[Bb]obohui\b", name, text)
+    return text
+
+
+def polish_spoken(text: str, code: str = "zh") -> str:
+    """去掉思考标记，换上专名，英语和韩语里的汉字数字改成阿拉伯数字。"""
+    code = code if code in LANGS else "zh"
+    spoken = _THINK.sub("", text or "")
+    spoken = spoken.replace("博博会", _NAME.get(code) or "博博会")
+    for old, new in _GLUE.get(code, {}).items():
+        spoken = spoken.replace(old, new)
+    if code in ("en", "ko"):
+        spoken = _convert_cn_numbers(spoken)
+        spoken = _ordinals(spoken, code)
+    spoken = _normalize_expo(spoken, code)
+    if code == "zh" and "宽创" in spoken and "博博会" not in spoken:
+        spoken = "我就在博博会现场的宽创展厅里。" + spoken
+    spoken = re.sub(r"[ \t]*\n+[ \t]*", " ", spoken)
+    spoken = re.sub(r"[ \t]{2,}", " ", spoken)
+    spoken = re.sub(r"\s+([。！？，、,.!?])", r"\1", spoken)
+    return spoken.strip()
+
+
+def _still_dirty(text: str, code: str) -> bool:
+    if code == "en":
+        return _HAN.search(text or "") is not None
+    if code == "ko":
+        return len(_HAN.findall(text or "")) >= 2
+    if code == "ja":
+        return "博博会" in (text or "")
+    return False
+
+
 def _translate(text: str, code: str) -> str:
-    from llm.client import clean_full_answer, llm_collect
+    from llm.client import llm_collect
     label = LANGS[code]["label"]
     raw = llm_collect([
         {"role": "user", "content": (
-            "把下面的口播译成%s。只输出译文，不要解释，不要加引号。%s\n%s\n/no_think"
+            "把下面的口播译成%s。只输出译文，不要解释，不要加引号，不要输出思考过程。"
+            "数字用阿拉伯数字，不要写汉字数字。%s\n%s"
             % (label, _PROPER.get(code, ""), text)
         )},
     ], max_tokens=400)
-    return (clean_full_answer(raw) or "").strip()
+    return _THINK.sub("", raw or "").strip()
+
+
+def _scrub(text: str, code: str) -> str:
+    """译文里还夹着汉字时再改一版。专名先收成 EXPO，避免被改掉。"""
+    from llm.client import llm_collect
+    name = _NAME.get(code) or ""
+    masked = (text or "").replace(name, "EXPO") if name else (text or "")
+    label = LANGS[code]["label"]
+    raw = llm_collect([
+        {"role": "user", "content": (
+            "把下面口播改成纯%s。不要留下任何汉字。数字用阿拉伯数字。"
+            "EXPO 原样保留。只输出正文。\n%s" % (label, masked)
+        )},
+    ], max_tokens=400)
+    out = _THINK.sub("", raw or "").strip()
+    if name:
+        out = out.replace("EXPO", name)
+    return out
 
 
 def needs_translation(text: str, code: str = "zh") -> bool:
@@ -142,13 +283,19 @@ def needs_translation(text: str, code: str = "zh") -> bool:
 
 
 def prepare_spoken(text: str, code: str = "zh") -> str:
-    """已经是目标语就原样用。不是的话再译一版，然后交给 TTS。"""
-    spoken = (text or "").strip()
+    """换成目标语，并清掉汉字数字、思考标记和没译完的专名。"""
     code = code if code in LANGS else "zh"
-    if not spoken or not needs_translation(spoken, code):
+    spoken = polish_spoken(text or "", code)
+    if not spoken or code == "zh":
         return spoken
-    try:
-        translated = _translate(spoken, code)
-    except Exception:
-        return spoken
-    return translated or spoken
+    if needs_translation(spoken, code):
+        try:
+            spoken = polish_spoken(_translate(spoken, code) or spoken, code)
+        except Exception:
+            return spoken
+    if _still_dirty(spoken, code):
+        try:
+            spoken = polish_spoken(_scrub(spoken, code) or spoken, code)
+        except Exception:
+            pass
+    return spoken

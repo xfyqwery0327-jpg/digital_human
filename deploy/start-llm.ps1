@@ -1,15 +1,19 @@
-﻿# 开机拉起大模型 8080：用 llama-server.exe 加载 Qwen3-8B，关闭思考模式。
-# 历史 start-llm.ps1 用 python llama_cpp.server，但 digital_human_server 环境未装
-# llama_cpp 模块，且模型带思考会耗光 max_tokens 导致 content 为空，故改为原生 llama-server。
-# 参考实际运行日志(llama.out.log)：Qwen3-8B-Q4_K_M.gguf, n_slots=4, n_ctx_slot=2048。
+﻿# 开机拉起大模型 8080：llama-server.exe，关闭思考模式。
+# 不带 -Model 时读 deploy\last-start.txt 的 llm=，再读 deploy\llm.model。
+# 两处都没有就用 Qwen3-8B-Q4_K_M.gguf。
+# 4B 与 switch.ps1 同一文件名：Qwen3-4B-Instruct-2507-Q4_K_M.gguf。
 param(
-    [switch]$Foreground
+    [switch]$Foreground,
+    [string]$Model = ""
 )
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
-if (-not (Test-Path (Join-Path $Root "models\Qwen3-8B-Q4_K_M.gguf"))) {
+if (-not (Test-Path (Join-Path $Root "server9\app.py"))) {
     $Root = "C:\digital_human"
+}
+if (-not (Test-Path (Join-Path $Root "server9\app.py"))) {
+    throw ("server9\app.py not found, Root=" + $Root)
 }
 
 $Logs = Join-Path $Root "logs"
@@ -38,6 +42,41 @@ function Test-Port8080 {
     }
 }
 
+function Resolve-LlmTag([string]$raw) {
+    $t = (($raw + "").Trim().ToLower())
+    if ($t -in @("4", "4b", "qwen3-4b", "qwen3-4b-instruct-2507")) { return "4" }
+    if ($t -in @("8", "8b", "qwen3-8b")) { return "8" }
+    return ""
+}
+
+function Resolve-LlmPath {
+    $names = @{
+        "4" = "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+        "8" = "Qwen3-8B-Q4_K_M.gguf"
+    }
+    $tag = Resolve-LlmTag $Model
+    if (-not $tag) {
+        $last = Join-Path $Root "deploy\last-start.txt"
+        if (Test-Path $last) {
+            foreach ($line in @(Get-Content -Path $last -ErrorAction SilentlyContinue)) {
+                if ($line -match '^\s*llm\s*=\s*(\S+)') {
+                    $tag = Resolve-LlmTag $Matches[1]
+                    if ($tag) { break }
+                }
+            }
+        }
+    }
+    if (-not $tag) {
+        $marker = Join-Path $Root "deploy\llm.model"
+        if (Test-Path $marker) {
+            $raw = ((Get-Content -Path $marker -Raw -ErrorAction SilentlyContinue) + "").Trim()
+            if ($raw) { $tag = Resolve-LlmTag (($raw -split "\s+")[0]) }
+        }
+    }
+    if (-not $tag) { $tag = "8" }
+    return Join-Path $Root ("models\" + $names[$tag])
+}
+
 try {
     Write-Boot ("script start user=" + $env:USERNAME)
 
@@ -52,7 +91,7 @@ try {
         Write-Boot ("llama-server.exe not found: " + $exe)
         throw "llama-server.exe not found"
     }
-    $model = Join-Path $Root "models\Qwen3-8B-Q4_K_M.gguf"
+    $model = Resolve-LlmPath
     if (-not (Test-Path $model)) {
         Write-Boot ("model not found: " + $model)
         throw "model not found"
@@ -63,6 +102,7 @@ try {
     if (Test-Path $errLog) { Remove-Item $errLog -Force -ErrorAction SilentlyContinue }
 
     # 与历史运行一致的槽位：-np 4 -c 8192(每槽2048)。--reasoning off 关闭思考，直接输出 content。
+    # 不写 --slot-save-path，KV / prompt cache 只在本进程内存里，进程退出即清空。
     $args = @(
         "-m", $model,
         "-ngl", "99",

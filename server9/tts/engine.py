@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""语音管线选择。改 deploy/last-start.txt 的 tts=，重启讲解员后生效。
+"""语音管线。讲解员固定走独立服务 qwen-tts-service，默认 http://127.0.0.1:8812。
 
-cosyvoice  用上次记下的 CosyVoice2 或 CosyVoice3
-qwen3      用 models/Qwen3-TTS-12Hz-0.6B-Base，参考音沿用人设 prompt wav
+进程内 Qwen3-TTS、SGLang WebSocket、CosyVoice 不再作为启动选项。
+last-start.txt 里旧的 tts=cosyvoice 也不会再被选中。
 """
 from __future__ import annotations
 
@@ -10,10 +10,12 @@ import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-LAST_START = ROOT / "deploy" / "last-start.txt"
 QWEN_DIRNAME = "Qwen3-TTS-12Hz-0.6B-Base"
 
-_QWEN = {"qwen", "qwen3", "qwen3-tts", "qwen3tts"}
+_QWEN = {
+    "qwen", "qwen3", "qwen3-tts", "qwen3tts",
+    "qwen-service", "qwen-tts-service", "service",
+}
 
 
 def normalize_tts_engine(raw) -> str:
@@ -23,28 +25,9 @@ def normalize_tts_engine(raw) -> str:
     return "cosyvoice"
 
 
-def _read_last(key: str) -> str:
-    try:
-        lines = LAST_START.read_text(encoding="utf-8", errors="ignore").splitlines()
-    except OSError:
-        return ""
-    prefix = key + "="
-    for line in lines:
-        row = line.strip()
-        if row.lower().startswith(prefix):
-            return row.split("=", 1)[1].strip()
-    return ""
-
-
 def tts_engine_name() -> str:
-    """环境变量优先。没设时读 last-start.txt，缺省 cosyvoice。"""
-    env = os.environ.get("TTS_ENGINE", "").strip()
-    if env:
-        return normalize_tts_engine(env)
-    saved = _read_last("tts")
-    if saved:
-        return normalize_tts_engine(saved)
-    return "cosyvoice"
+    """固定 qwen3。旧的 cosyvoice / sglang / 进程内标记不再选用。"""
+    return "qwen3"
 
 
 def use_qwen_tts() -> bool:

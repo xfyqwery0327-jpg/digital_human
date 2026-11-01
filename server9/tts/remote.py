@@ -16,12 +16,8 @@ def qwen_service_url() -> str:
 
 
 def use_qwen_service() -> bool:
-    """Qwen 口播直连 8812。设 TTS_QWEN_REMOTE=0 才回到本进程加载权重。"""
-    from tts.engine import use_qwen_tts
-    if not use_qwen_tts():
-        return False
-    flag = (os.environ.get("TTS_QWEN_REMOTE") or "1").strip().lower()
-    return flag not in {"0", "false", "no", "off"}
+    """口播固定直连 qwen-tts-service。进程内 Qwen3-TTS 不再作为启动选项。"""
+    return True
 
 
 def use_remote_tts() -> bool:

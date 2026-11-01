@@ -79,56 +79,20 @@ try {
         }
         if (-not $env:COSYVOICE_PATH) { $env:COSYVOICE_PATH = "C:\ro\CosyVoice" }
     }
-    $choice = ""
-    if (-not $env:COSYVOICE_MODEL) {
-        $choice = "3"
-        $token = $null
-        $last = Join-Path $Root "deploy\last-start.txt"
-        if (Test-Path $last) {
-            foreach ($line in @(Get-Content -Path $last -ErrorAction SilentlyContinue)) {
-                if ($line -match '^\s*cosyvoice\s*=\s*(\S+)') { $token = $Matches[1]; break }
-            }
-        }
-        if (-not $token) {
-            $marker = Join-Path $Root "deploy\cosyvoice.model"
-            if (Test-Path $marker) {
-                $raw = ((Get-Content -Path $marker -Raw -ErrorAction SilentlyContinue) + "").Trim()
-                if ($raw) { $token = ($raw -split "\s+")[0] }
-            }
-        }
-        $t = (($token + "").Trim().ToLower())
-        if ($t -in @("2", "cv2", "cosyvoice2", "2-0.5b", "cosyvoice2-0.5b")) { $choice = "2" }
-        $dirname = $(if ($choice -eq "2") { "CosyVoice2-0.5B" } else { "Fun-CosyVoice3-0.5B" })
-        $env:COSYVOICE_MODEL = Join-Path $env:COSYVOICE_PATH ("pretrained_models\" + $dirname)
-    } elseif ($env:COSYVOICE_MODEL -match "CosyVoice2") {
-        $choice = "2"
-    } elseif ($env:COSYVOICE_MODEL -match "CosyVoice3") {
-        $choice = "3"
+    # 不按 last-start 选择 CosyVoice 权重。讲解口播只走 qwen-tts-service。
+    if (Test-Path Env:COSYVOICE_MODEL) {
+        Remove-Item Env:COSYVOICE_MODEL
     }
 
-    $ttsEngine = "cosyvoice"
-    if (-not $env:TTS_ENGINE) {
-        $ttsToken = $null
-        $lastTts = Join-Path $Root "deploy\last-start.txt"
-        if (Test-Path $lastTts) {
-            foreach ($line in @(Get-Content -Path $lastTts -ErrorAction SilentlyContinue)) {
-                if ($line -match '^\s*tts\s*=\s*(\S+)') { $ttsToken = $Matches[1]; break }
-            }
-        }
-        $ttsName = (($ttsToken + "").Trim().ToLower())
-        if ($ttsName -in @("qwen", "qwen3", "qwen3-tts", "qwen3tts")) { $ttsEngine = "qwen3" }
-        $env:TTS_ENGINE = $ttsEngine
-    } else {
-        $ttsName = $env:TTS_ENGINE.Trim().ToLower()
-        if ($ttsName -in @("qwen", "qwen3", "qwen3-tts", "qwen3tts")) { $ttsEngine = "qwen3" }
-        else { $ttsEngine = "cosyvoice" }
-        $env:TTS_ENGINE = $ttsEngine
+    # 语音固定走独立 qwen-tts-service。不读 last-start 的 tts= / cosyvoice=。
+    # 进程内 Qwen3-TTS、SGLang WebSocket、CosyVoice 不再作为启动选项。
+    $env:TTS_ENGINE = "qwen3"
+    $env:TTS_QWEN_REMOTE = "1"
+    if (-not $env:TTS_QWEN_URL) {
+        $env:TTS_QWEN_URL = "http://127.0.0.1:8812"
     }
-    if ($ttsEngine -eq "qwen3" -and -not $env:QWEN_TTS_MODEL) {
-        $env:QWEN_TTS_MODEL = Join-Path $Root "models\Qwen3-TTS-12Hz-0.6B-Base"
-    }
-    if ($ttsEngine -eq "qwen3" -and $env:TTS_QWEN_URL) {
-        Write-Boot ("TTS_QWEN_URL=" + $env:TTS_QWEN_URL + " 已设置，讲解员将使用这个地址而不是默认的 8812")
+    if (Test-Path Env:TTS_BACKEND) {
+        Remove-Item Env:TTS_BACKEND
     }
 
     $Python = Find-RobotPython
@@ -151,13 +115,7 @@ try {
         "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1\bin"
     ) | Where-Object { $_ -and (Test-Path $_) }
     $env:PATH = ($CondaEnv + ";" + ($extras -join ";") + ";" + $env:PATH)
-    Write-Boot ("python=" + $Python + " tts=" + $env:TTS_ENGINE + " alloc=" + $env:PYTORCH_CUDA_ALLOC_CONF)
-    Write-Boot ("cosyvoice_path=" + $env:COSYVOICE_PATH)
-    Write-Boot ("cosyvoice=" + $choice + " model=" + $env:COSYVOICE_MODEL)
-    if ($env:TTS_ENGINE -eq "qwen3") {
-        $directTts = if ($env:TTS_QWEN_URL) { $env:TTS_QWEN_URL } else { "http://127.0.0.1:8812" }
-        Write-Boot ("qwen3=" + $env:QWEN_TTS_MODEL + " tts_url=" + $directTts)
-    }
+    Write-Boot ("python=" + $Python + " tts=qwen-tts-service url=" + $env:TTS_QWEN_URL + " remote=" + $env:TTS_QWEN_REMOTE + " alloc=" + $env:PYTORCH_CUDA_ALLOC_CONF)
 
     Set-Location $Root
     Add-Content -Path $outLog -Value ("`r`n==== " + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + " start ====`r`n")

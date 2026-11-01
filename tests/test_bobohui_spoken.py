@@ -9,6 +9,7 @@ sys.path.insert(0, str(ROOT / "server9"))
 from persona.registry import _parse_persona, _yaml_load
 from config import PERSONAS_DIR
 from rag.bobohui import HOOK_TOPIC, hall_hook
+from rag.scope import is_other_exhibition_query
 from rag.dialogue import RealtimeMemory, note_realtime, realtime_reply, suggest_hooks, visit_fact_reply
 
 OLD_SHOW = ("浪漫与星辰", "贵州省博物馆", "七十八元", "四十九元", "这场商代的展", "龟兹博物馆", "这场展有我的")
@@ -65,6 +66,7 @@ def test_three_personas_only_speak_bobohui():
         assert "我就在博博会现场的宽创展厅里" in lines["开放时间"]
         assert "在那里" not in lines["开放时间"] and "我听说" not in lines["开放时间"]
         assert "不要说在那里" in prompt and "不要说我听说" in prompt
+        assert is_other_exhibition_query("浪漫与星辰什么时候开展", persona)
         assert lines["天气口播"].endswith(hall_hook("天气"))
         assert lines["新闻口播"].endswith(hall_hook("新闻"))
         assert "http" not in lines["新闻口播"]
