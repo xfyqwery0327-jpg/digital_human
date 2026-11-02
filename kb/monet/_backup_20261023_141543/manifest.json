@@ -1,0 +1,71 @@
+{
+  "added": [
+    {
+      "id": "cce0399e7422",
+      "sheet": "Sheet1",
+      "no": "62",
+      "title": "达利《小王子》",
+      "chars": 109
+    },
+    {
+      "id": "04217775f0ed",
+      "sheet": "Sheet1",
+      "no": "63",
+      "title": "达利《独角兽》",
+      "chars": 95
+    },
+    {
+      "id": "f14ac17c21fa",
+      "sheet": "Sheet2",
+      "no": "1",
+      "title": "基本信息",
+      "chars": 269
+    },
+    {
+      "id": "8ed517d1d161",
+      "sheet": "Sheet2",
+      "no": "2",
+      "title": "展品规模",
+      "chars": 268
+    },
+    {
+      "id": "519bcf53e83c",
+      "sheet": "Sheet2",
+      "no": "3",
+      "title": "篇章结构",
+      "chars": 380
+    },
+    {
+      "id": "283990b9c378",
+      "sheet": "Sheet2",
+      "no": "4",
+      "title": "互动体验科技亮点",
+      "chars": 244
+    },
+    {
+      "id": "5d5587629de4",
+      "sheet": "Sheet2",
+      "no": "5",
+      "title": "配套活动",
+      "chars": 182
+    },
+    {
+      "id": "750ae38aa6f5",
+      "sheet": "Sheet2",
+      "no": "6",
+      "title": "票务信息",
+      "chars": 165
+    },
+    {
+      "id": "d418c2035432",
+      "sheet": "Sheet2",
+      "no": "7",
+      "title": "展览背景",
+      "chars": 258
+    }
+  ],
+  "skipped_same_body": 134,
+  "items": 2025,
+  "vectors": 4041,
+  "backup": "D:\\projects\\digital_human\\kb\\monet\\_backup_20261023_141543"
+}
