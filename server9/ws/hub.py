@@ -57,28 +57,72 @@ def attach_robot_id(obj: dict, robot_id: str = "", persona_id: str = "") -> dict
     return out
 
 
+def _client_host(ws: WebSocket) -> str:
+    client = getattr(ws, "client", None)
+    host = getattr(client, "host", None) if client is not None else ""
+    return (host or "").strip()
+
+
 class TtsFanout:
-    """登记 /ws/{persona_id}/tts 客户端。旧 /ws/tts 登记为 monet。"""
+    """登记 /ws/{persona_id}/tts 客户端。旧 /ws/tts 登记为 monet。
+
+    同一台机器对同一个人设反复重连时，旧连接往往不断开，ask 会把同一段 PCM
+    推到每一条上，前端就叠着播。新连接登记时关掉同主机、同人设的旧连接。
+    """
 
     def __init__(self):
         self._guard = asyncio.Lock()
-        self._clients: Dict[int, Tuple[WebSocket, asyncio.Lock, str]] = {}
+        # id(ws) -> (ws, send_lock, persona_id, client_host, cancel_bag)
+        self._clients: Dict[int, Tuple] = {}
         self._cancel_bags: List[Tuple[str, Dict[str, threading.Event]]] = []
 
     def client_count(self, persona_id: str = "") -> int:
         if not persona_id:
             return len(self._clients)
         want = persona_id.strip() or _LEGACY_PERSONA
-        return sum(1 for *_, pid in self._clients.values() if (pid or _LEGACY_PERSONA) == want)
+        return sum(
+            1 for item in self._clients.values()
+            if (item[2] or _LEGACY_PERSONA) == want
+        )
 
     async def register(self, ws: WebSocket, send_lock: asyncio.Lock,
                        cancel_bag: Optional[Dict[str, threading.Event]] = None,
                        persona_id: str = ""):
         pid = (persona_id or "").strip() or _LEGACY_PERSONA
+        host = _client_host(ws)
+        stale = []
         async with self._guard:
-            self._clients[id(ws)] = (ws, send_lock, pid)
+            for key, item in list(self._clients.items()):
+                old_ws, _lock, old_pid, old_host, old_bag = item
+                if key == id(ws):
+                    continue
+                if (old_pid or _LEGACY_PERSONA) != pid:
+                    continue
+                if not host or old_host != host:
+                    continue
+                self._clients.pop(key, None)
+                if old_bag is not None:
+                    self._cancel_bags = [
+                        pair for pair in self._cancel_bags if pair[1] is not old_bag
+                    ]
+                stale.append((old_ws, old_bag))
+            self._clients[id(ws)] = (ws, send_lock, pid, host, cancel_bag)
             if cancel_bag is not None:
                 self._cancel_bags.append((pid, cancel_bag))
+        if not stale:
+            return
+        for old_ws, old_bag in stale:
+            if old_bag is not None:
+                for ev in list(old_bag.values()):
+                    try:
+                        ev.set()
+                    except Exception:
+                        pass
+            try:
+                await old_ws.close(code=1000, reason="replaced")
+            except Exception as e:
+                print(f"[ROBOT] 关闭旧 /ws/{pid}/tts 失败 host={host}: {e}")
+        print(f"[ROBOT] 同一台机器重连 /ws/{pid}/tts，已关掉 {len(stale)} 条旧连接 host={host or '-'}")
 
     async def unregister(self, ws: WebSocket,
                          cancel_bag: Optional[Dict[str, threading.Event]] = None):
@@ -120,7 +164,8 @@ class TtsFanout:
         ok = 0
         dead: List[int] = []
         kind = obj.get("type")
-        for key, (ws, lock, pid) in items:
+        delivered = []
+        for key, (ws, lock, pid, host, _bag) in items:
             bound = pid or _LEGACY_PERSONA
             if want and bound != want:
                 continue
@@ -128,9 +173,15 @@ class TtsFanout:
                 async with lock:
                     await asyncio.wait_for(ws.send_json(obj), timeout=8.0)
                 ok += 1
+                if kind == "tts_start":
+                    port = getattr(getattr(ws, "client", None), "port", "")
+                    delivered.append(f"{host or '-'}:{port}" if port else (host or "-"))
             except Exception as e:
                 print(f"[ROBOT] WS 推送失败 type={kind} persona={bound} want={want or '-'}: {e}")
                 dead.append(key)
+        if kind == "tts_start" and ok > 1:
+            print(f"[ROBOT] tts_start 同时发给 {ok} 条 /ws/{want or '-'}/tts，会叠着播 "
+                  f"clients={','.join(delivered)}")
         if dead:
             async with self._guard:
                 for k in dead:
