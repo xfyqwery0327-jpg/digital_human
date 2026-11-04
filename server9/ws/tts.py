@@ -36,6 +36,7 @@ from rag.dialogue import (
     suggest_hooks, visit_fact_reply, exhibit_names, titles_from_items, HALL_INTENTS,
     RealtimeMemory, intention_event, button_screen_intent,
 )
+from rag.transcript import transcript_reply
 from services.screen_hooks import (
     is_ticket_booking, booking_reply, ticket_form_event, request_ticket_form,
     artworks_event, notify_artworks, headline_event, request_headline_image,
@@ -729,6 +730,12 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
             print(f"🚫 闲句或认人问题，不叫大模型: {user_question[:40]}")
             llm_answer = refuse_text()
             _remember("knowledge", llm_answer, refused=True)
+            await send_llm_answer(llm_answer)
+            await send_subtitle(llm_answer)
+        elif (spoken := transcript_reply(user_question, persona)):
+            llm_answer = spoken
+            print(f"🎙 观众实录原句: {user_question[:40]}")
+            _remember("transcript", llm_answer)
             await send_llm_answer(llm_answer)
             await send_subtitle(llm_answer)
         elif is_family_question(user_question):

@@ -34,6 +34,7 @@ from rag.dialogue import (
     rule_intent, RealtimeMemory,
     is_noise_question, is_relation_question, is_family_question, family_reply,
 )
+from rag.transcript import transcript_reply
 from services.screen_hooks import (
     is_ticket_booking, booking_reply, ticket_form_event, request_ticket_form,
     headline_event, request_headline_image,
@@ -359,6 +360,16 @@ async def _robot_run_turn(request_id: str, query: str, speaker: str,
             round_no = await robot_hub.bump_round()
             if session:
                 session.add_turn(query, speak_text, [], intent=kind)
+                persistence.save_session(session)
+        elif (spoken := transcript_reply(query, active())):
+            speak_text = spoken
+            preserve_text = True
+            sources = ["transcript"]
+            log.info("ask 实录原句 persona=%s chars=%s query=%s",
+                     persona_id, len(speak_text), (query or "")[:80])
+            round_no = await robot_hub.bump_round()
+            if session:
+                session.add_turn(query, speak_text, sources, intent="transcript")
                 persistence.save_session(session)
         elif is_greeting(query):
             speak_text = pick_hello()

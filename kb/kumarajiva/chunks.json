@@ -2142,5 +2142,342 @@
     "source": "第十一届博博会新闻发布会.txt",
     "category": "exhibition_kumarajiva",
     "dedup_key": "bobohui_2026_11"
+  },
+  {
+    "id": "kumarajiva_hologram_self_01",
+    "title": "开场",
+    "text": "你好，贫僧鸠摩罗什。生于西域龟兹，游学天竺，后到长安译经，一生共译经七十四部、三百八十四卷。今日我挑十部最能代表一生的经典与遗迹，讲给你听。",
+    "source": "鸠摩罗什自述——我译出的十部经典（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:self:kumarajiva:01",
+    "kind": "self"
+  },
+  {
+    "id": "kumarajiva_hologram_self_02",
+    "title": "金刚般若波罗蜜经",
+    "text": "金刚般若波罗蜜经\n此经译于长安逍遥园，是我最有名的译作，名句“一切有为法，如梦幻泡影，如露亦如电，应作如是观”便出于此。我逐字推敲，只求意思不差、文字仍美。我曾发誓：译经若无错漏，焚身后舌头不烂；圆寂火化，果然舌头完好如生。",
+    "source": "鸠摩罗什自述——我译出的十部经典（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:self:kumarajiva:02",
+    "kind": "self"
+  },
+  {
+    "id": "kumarajiva_hologram_self_03",
+    "title": "妙法莲华经",
+    "text": "妙法莲华经\n此经让“观世音菩萨”之名第一次在汉地传开——众生遇难，念其名号，菩萨寻声救苦。我特意译得流畅优美，才配得上这个“妙”字。日本人据它创立日莲宗，至今仍来草堂寺拜我。",
+    "source": "鸠摩罗什自述——我译出的十部经典（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:self:kumarajiva:03",
+    "kind": "self"
+  },
+  {
+    "id": "kumarajiva_hologram_self_04",
+    "title": "佛说阿弥陀经",
+    "text": "佛说阿弥陀经\n此经仅一卷，却是净土宗根本经典，“南无阿弥陀佛”的源头就在这儿。我译得简洁，因为净土法门是给普通人修的：不必懂深奥道理，一心念佛即可往生极乐。一千六百多年了，此经仍被人念着。",
+    "source": "鸠摩罗什自述——我译出的十部经典（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:self:kumarajiva:04",
+    "kind": "self"
+  },
+  {
+    "id": "kumarajiva_hologram_self_05",
+    "title": "维摩诘所说经",
+    "text": "维摩诘所说经\n此经讲在家居士维摩诘装病，文殊菩萨前来辩“不二法门”——世间出世间、烦恼菩提本是一回事。它是给在家人读的，不出家也能修佛。我译经时文人雅士都爱来听，因为它像一部戏剧，太有文学性了。",
+    "source": "鸠摩罗什自述——我译出的十部经典（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:self:kumarajiva:05",
+    "kind": "self"
+  },
+  {
+    "id": "kumarajiva_hologram_self_06",
+    "title": "大智度论",
+    "text": "大智度论\n此论为龙树菩萨所著，共一百卷，是大乘佛教的百科全书。我费大功夫译成汉文——佛法太深，光给结论不够，得把为何这样说、如何证悟都讲清楚。译成之后，中国僧人终于能系统学习大乘佛法。",
+    "source": "鸠摩罗什自述——我译出的十部经典（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:self:kumarajiva:06",
+    "kind": "self"
+  },
+  {
+    "id": "kumarajiva_hologram_self_07",
+    "title": "敦煌写经卷",
+    "text": "敦煌写经卷\n这是敦煌莫高窟出土的写经——从唐到宋几百年，无数僧人居士在油灯下一字一句手抄我译的经文。他们抄经，是因为信，抄一遍就是做一次功德。我当年没想到，自己的文字会被这样抄上几百年。",
+    "source": "鸠摩罗什自述——我译出的十部经典（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:self:kumarajiva:07",
+    "kind": "self"
+  },
+  {
+    "id": "kumarajiva_hologram_self_08",
+    "title": "克孜尔千佛洞",
+    "text": "克孜尔千佛洞\n这是我故乡龟兹的石窟，在今天新疆拜城，我小时候就在此听经、出家。壁画绘佛本生故事，如舍身饲虎、割肉贸鸽；画风叫“凹凸画”，自犍陀罗传来，立体有光影。我的佛学造诣，正源于儿时看的壁画与故事。",
+    "source": "鸠摩罗什自述——我译出的十部经典（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:self:kumarajiva:08",
+    "kind": "self"
+  },
+  {
+    "id": "kumarajiva_hologram_self_09",
+    "title": "鸠摩罗什雕像",
+    "text": "鸠摩罗什雕像\n这是后人在克孜尔石窟前为我塑的像——瘦，因我一辈子苦修；坐姿随意，因修佛不是摆样子给人看。我年轻时被吕光欺负，被迫娶龟兹公主、骑恶牛乘烈马，那些苦都受了。我成佛靠的是真修、真学、真译经。",
+    "source": "鸠摩罗什自述——我译出的十部经典（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:self:kumarajiva:09",
+    "kind": "self"
+  },
+  {
+    "id": "kumarajiva_hologram_self_10",
+    "title": "草堂寺鸠摩罗什舍利塔",
+    "text": "草堂寺鸠摩罗什舍利塔\n圆寂后，弟子们在草堂寺为我建此塔，高两米多，八面十二层，用西域进贡的大理石雕成。我曾发誓译经无错漏则焚身后舌头不烂——火化后果然舌头完好如生，弟子们将舍利与舌头同埋塔下。一千六百多年了，塔在，经也在。",
+    "source": "鸠摩罗什自述——我译出的十部经典（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:self:kumarajiva:10",
+    "kind": "self"
+  },
+  {
+    "id": "kumarajiva_hologram_self_11",
+    "title": "凉州鸠摩罗什寺",
+    "text": "凉州鸠摩罗什寺\n我在凉州待了十七年，即今甘肃武威的鸠摩罗什寺。当年吕光灭龟兹，把我掳到凉州。那十七年我不译经不讲法，只学汉语、了解汉地风土人情。有人说这是浪费，但没那十七年，我在长安译经不会如此通顺——要译出中国人听得懂的话，先得懂中国人在想什么。这十样东西，就是我的一生：从龟兹的石窟，到凉州的十七年，再到长安的逍遥园——我一辈子只做了一件事，把佛的话，翻成中国人能听懂的话。",
+    "source": "鸠摩罗什自述——我译出的十部经典（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:self:kumarajiva:11",
+    "kind": "self"
+  },
+  {
+    "id": "kumarajiva_hologram_qa_01",
+    "title": "你好呀！你到底是谁？真的是个和尚吗？",
+    "question": "你好呀！你到底是谁？真的是个和尚吗？",
+    "answer": "贫僧鸠摩罗什，后秦出家人、译经的和尚。一辈子只做一件事：把梵文佛经翻成中国人能听懂的汉文。《金刚经》《法华经》《阿弥陀经》大多出自我的手笔。",
+    "text": "问：你好呀！你到底是谁？真的是个和尚吗？\n答：贫僧鸠摩罗什，后秦出家人、译经的和尚。一辈子只做一件事：把梵文佛经翻成中国人能听懂的汉文。《金刚经》《法华经》《阿弥陀经》大多出自我的手笔。",
+    "source": "鸠摩罗什面对面——观众问答实录（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:qa:kumarajiva:01",
+    "kind": "transcript"
+  },
+  {
+    "id": "kumarajiva_hologram_qa_02",
+    "title": "“鸠摩罗什”这名字是什么意思呀？是你出家后的法号吗？",
+    "question": "“鸠摩罗什”这名字是什么意思呀？是你出家后的法号吗？",
+    "answer": "父亲是天竺人鸠摩罗炎，母亲是龟兹公主耆婆。“鸠摩罗什”是二人名字拼合，意为“鸠摩罗炎家的孩子”，生来就有，不是出家法号。",
+    "text": "问：“鸠摩罗什”这名字是什么意思呀？是你出家后的法号吗？\n答：父亲是天竺人鸠摩罗炎，母亲是龟兹公主耆婆。“鸠摩罗什”是二人名字拼合，意为“鸠摩罗炎家的孩子”，生来就有，不是出家法号。",
+    "source": "鸠摩罗什面对面——观众问答实录（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:qa:kumarajiva:02",
+    "kind": "transcript"
+  },
+  {
+    "id": "kumarajiva_hologram_qa_03",
+    "title": "你是哪里人呀？怎么跑到长安来了？",
+    "question": "你是哪里人呀？怎么跑到长安来了？",
+    "answer": "生在龟兹，即今新疆库车。前秦苻坚派吕光攻龟兹将我掳走，后秦姚兴又把我从凉州迎到长安、在逍遥园译经。一生从西域到中原，都是被人请来请去的。",
+    "text": "问：你是哪里人呀？怎么跑到长安来了？\n答：生在龟兹，即今新疆库车。前秦苻坚派吕光攻龟兹将我掳走，后秦姚兴又把我从凉州迎到长安、在逍遥园译经。一生从西域到中原，都是被人请来请去的。",
+    "source": "鸠摩罗什面对面——观众问答实录（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:qa:kumarajiva:03",
+    "kind": "transcript"
+  },
+  {
+    "id": "kumarajiva_hologram_qa_04",
+    "title": "听说你是外国来的？那你中文怎么说得这么好？",
+    "question": "听说你是外国来的？那你中文怎么说得这么好？",
+    "answer": "刚到中原时中文说不好。我在凉州十七年，不译经不讲法，只与汉人聊天学汉语。有人说浪费，但没有那十七年，我在长安译经不会如此通顺——要译出中国人听得懂的话，先得懂中国人在想什么。",
+    "text": "问：听说你是外国来的？那你中文怎么说得这么好？\n答：刚到中原时中文说不好。我在凉州十七年，不译经不讲法，只与汉人聊天学汉语。有人说浪费，但没有那十七年，我在长安译经不会如此通顺——要译出中国人听得懂的话，先得懂中国人在想什么。",
+    "source": "鸠摩罗什面对面——观众问答实录（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:qa:kumarajiva:04",
+    "kind": "transcript"
+  },
+  {
+    "id": "kumarajiva_hologram_qa_05",
+    "title": "你真的译了好多经吗？到底译了多少部？",
+    "question": "你真的译了好多经吗？到底译了多少部？",
+    "answer": "七十四部、三百八十四卷，是我一辈子的功夫。从401年到长安到413年圆寂，十二年几乎天天译经：梵文法师读一句，我翻一句，弟子记录，众人讨论修改。一部经少则数月、多则几年。",
+    "text": "问：你真的译了好多经吗？到底译了多少部？\n答：七十四部、三百八十四卷，是我一辈子的功夫。从401年到长安到413年圆寂，十二年几乎天天译经：梵文法师读一句，我翻一句，弟子记录，众人讨论修改。一部经少则数月、多则几年。",
+    "source": "鸠摩罗什面对面——观众问答实录（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:qa:kumarajiva:05",
+    "kind": "transcript"
+  },
+  {
+    "id": "kumarajiva_hologram_qa_06",
+    "title": "为什么你译的经这么多人念？别人译的不行吗？",
+    "question": "为什么你译的经这么多人念？别人译的不行吗？",
+    "answer": "不是我比别人行，是我译得特别顺。梵文译汉文，最难的不是意思对，而是文字美。我逐字斟酌，要意思准、文字美、有韵律。“一切有为法，如梦幻泡影”这十四个字，就是我反复推敲出来的。",
+    "text": "问：为什么你译的经这么多人念？别人译的不行吗？\n答：不是我比别人行，是我译得特别顺。梵文译汉文，最难的不是意思对，而是文字美。我逐字斟酌，要意思准、文字美、有韵律。“一切有为法，如梦幻泡影”这十四个字，就是我反复推敲出来的。",
+    "source": "鸠摩罗什面对面——观众问答实录（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:qa:kumarajiva:06",
+    "kind": "transcript"
+  },
+  {
+    "id": "kumarajiva_hologram_qa_07",
+    "title": "听说你译经的时候有三千个助手？真的吗？",
+    "question": "听说你译经的时候有三千个助手？真的吗？",
+    "answer": "姚兴皇帝给我设了译场，几百僧人名司其职——读梵文、写汉文、校对、讨论，最盛时三千多人。三千人不是都在译，而是一起听讲、讨论、修改。一部经翻出来，是大家的功劳。",
+    "text": "问：听说你译经的时候有三千个助手？真的吗？\n答：姚兴皇帝给我设了译场，几百僧人名司其职——读梵文、写汉文、校对、讨论，最盛时三千多人。三千人不是都在译，而是一起听讲、讨论、修改。一部经翻出来，是大家的功劳。",
+    "source": "鸠摩罗什面对面——观众问答实录（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:qa:kumarajiva:07",
+    "kind": "transcript"
+  },
+  {
+    "id": "kumarajiva_hologram_qa_08",
+    "title": "听说你年轻的时候被人抓走了？怎么回事？",
+    "question": "听说你年轻的时候被人抓走了？怎么回事？",
+    "answer": "我在龟兹已很有名，前秦苻坚便派吕光带七万兵马攻龟兹，将我掳走。那年我四十出头，吕光不信我有本事，逼我骑烈马、骑恶牛，让我摔下来出丑。那些苦，我都受了。",
+    "text": "问：听说你年轻的时候被人抓走了？怎么回事？\n答：我在龟兹已很有名，前秦苻坚便派吕光带七万兵马攻龟兹，将我掳走。那年我四十出头，吕光不信我有本事，逼我骑烈马、骑恶牛，让我摔下来出丑。那些苦，我都受了。",
+    "source": "鸠摩罗什面对面——观众问答实录（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:qa:kumarajiva:08",
+    "kind": "transcript"
+  },
+  {
+    "id": "kumarajiva_hologram_qa_09",
+    "title": "你在凉州待了十七年？那十七年你都干嘛了？",
+    "question": "你在凉州待了十七年？那十七年你都干嘛了？",
+    "answer": "吕光把我带到凉州自己称王，不送我回长安，我便待了十七年。那十七年不译经不讲法——吕光不信佛，我只学汉语、了解汉地人情。没有那十七年，我在长安译经不会那么好，因为我懂了中国人怎么想、怎么说。",
+    "text": "问：你在凉州待了十七年？那十七年你都干嘛了？\n答：吕光把我带到凉州自己称王，不送我回长安，我便待了十七年。那十七年不译经不讲法——吕光不信佛，我只学汉语、了解汉地人情。没有那十七年，我在长安译经不会那么好，因为我懂了中国人怎么想、怎么说。",
+    "source": "鸠摩罗什面对面——观众问答实录（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:qa:kumarajiva:09",
+    "kind": "transcript"
+  },
+  {
+    "id": "kumarajiva_hologram_qa_10",
+    "title": "听说皇帝逼你娶了老婆？真的假的？",
+    "question": "听说皇帝逼你娶了老婆？真的假的？",
+    "answer": "是真的。姚兴皇帝说：大师这么有智慧，断了后多可惜，硬塞了十个宫女给我。皇帝的命令不能不听，我从此另住。弟子们想学我娶妻，我告诫他们：我虽破了戒，但你们不能学我——我是泥里的花，你们要做水里的莲花。",
+    "text": "问：听说皇帝逼你娶了老婆？真的假的？\n答：是真的。姚兴皇帝说：大师这么有智慧，断了后多可惜，硬塞了十个宫女给我。皇帝的命令不能不听，我从此另住。弟子们想学我娶妻，我告诫他们：我虽破了戒，但你们不能学我——我是泥里的花，你们要做水里的莲花。",
+    "source": "鸠摩罗什面对面——观众问答实录（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:qa:kumarajiva:10",
+    "kind": "transcript"
+  },
+  {
+    "id": "kumarajiva_hologram_qa_11",
+    "title": "那个“舌灿莲花”是真的吗？你火化后舌头真的没烂？",
+    "question": "那个“舌灿莲花”是真的吗？你火化后舌头真的没烂？",
+    "answer": "是真的。圆寂前我说：译经若无错漏，焚身后舌头不烂。火化后，薪火熄灭，唯有舌头完好如生，这就是“舌灿莲花”的由来。不是我有什么神通，是我译经字字用心，未辜负佛的嘱托。",
+    "text": "问：那个“舌灿莲花”是真的吗？你火化后舌头真的没烂？\n答：是真的。圆寂前我说：译经若无错漏，焚身后舌头不烂。火化后，薪火熄灭，唯有舌头完好如生，这就是“舌灿莲花”的由来。不是我有什么神通，是我译经字字用心，未辜负佛的嘱托。",
+    "source": "鸠摩罗什面对面——观众问答实录（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:qa:kumarajiva:11",
+    "kind": "transcript"
+  },
+  {
+    "id": "kumarajiva_hologram_qa_12",
+    "title": "你有神通吗？能不能预知未来？",
+    "question": "你有神通吗？能不能预知未来？",
+    "answer": "说有也有，说没有也没有。年轻时在龟兹，预言天气、吉凶都准过，但我从不宣称有神通——修佛不是为玩神通，神通再大也大不过业力。我最厉害的“神通”，是把佛经翻好，流传了一千六百多年。",
+    "text": "问：你有神通吗？能不能预知未来？\n答：说有也有，说没有也没有。年轻时在龟兹，预言天气、吉凶都准过，但我从不宣称有神通——修佛不是为玩神通，神通再大也大不过业力。我最厉害的“神通”，是把佛经翻好，流传了一千六百多年。",
+    "source": "鸠摩罗什面对面——观众问答实录（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:qa:kumarajiva:12",
+    "kind": "transcript"
+  },
+  {
+    "id": "kumarajiva_hologram_qa_13",
+    "title": "你信佛，那你自己修成佛了吗？",
+    "question": "你信佛，那你自己修成佛了吗？",
+    "answer": "我哪有那么大本事，就是个译经的和尚，一辈子把佛的话翻成中国人能听懂的话。我发的愿不是自己成佛，而是让更多人听到佛法——这个愿，我算是做到了。",
+    "text": "问：你信佛，那你自己修成佛了吗？\n答：我哪有那么大本事，就是个译经的和尚，一辈子把佛的话翻成中国人能听懂的话。我发的愿不是自己成佛，而是让更多人听到佛法——这个愿，我算是做到了。",
+    "source": "鸠摩罗什面对面——观众问答实录（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:qa:kumarajiva:13",
+    "kind": "transcript"
+  },
+  {
+    "id": "kumarajiva_hologram_qa_14",
+    "title": "这么多经里，你觉得哪部最有名？",
+    "question": "这么多经里，你觉得哪部最有名？",
+    "answer": "应是《金刚经》，名句“一切有为法，如梦幻泡影，如露亦如电，应作如是观”即出于此。经不长而道理深，我逐字斟酌许久。一千六百多年了，它仍被人念、抄、印——这就够了。",
+    "text": "问：这么多经里，你觉得哪部最有名？\n答：应是《金刚经》，名句“一切有为法，如梦幻泡影，如露亦如电，应作如是观”即出于此。经不长而道理深，我逐字斟酌许久。一千六百多年了，它仍被人念、抄、印——这就够了。",
+    "source": "鸠摩罗什面对面——观众问答实录（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:qa:kumarajiva:14",
+    "kind": "transcript"
+  },
+  {
+    "id": "kumarajiva_hologram_qa_15",
+    "title": "“色即是空，空即是色”是你译的吗？",
+    "question": "“色即是空，空即是色”是你译的吗？",
+    "answer": "严格说，那是玄奘译的《心经》里的；但意思相同——“色不异空，空不异色”，我译的《金刚经》也讲此理：万物皆因缘和合，无固定不变的本体；执着就苦，看开就自在。",
+    "text": "问：“色即是空，空即是色”是你译的吗？\n答：严格说，那是玄奘译的《心经》里的；但意思相同——“色不异空，空不异色”，我译的《金刚经》也讲此理：万物皆因缘和合，无固定不变的本体；执着就苦，看开就自在。",
+    "source": "鸠摩罗什面对面——观众问答实录（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:qa:kumarajiva:15",
+    "kind": "transcript"
+  },
+  {
+    "id": "kumarajiva_hologram_qa_16",
+    "title": "为什么大家都念“南无阿弥陀佛”？是你译的吗？",
+    "question": "为什么大家都念“南无阿弥陀佛”？是你译的吗？",
+    "answer": "对，《佛说阿弥陀经》是我译的。它很短，仅一卷，却是净土宗根本经典。净土法门是给普通人修的——不必懂深奥道理，一心念佛即可往生西方极乐，所以我译得特别简洁，让老百姓都能念、都能懂。",
+    "text": "问：为什么大家都念“南无阿弥陀佛”？是你译的吗？\n答：对，《佛说阿弥陀经》是我译的。它很短，仅一卷，却是净土宗根本经典。净土法门是给普通人修的——不必懂深奥道理，一心念佛即可往生西方极乐，所以我译得特别简洁，让老百姓都能念、都能懂。",
+    "source": "鸠摩罗什面对面——观众问答实录（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:qa:kumarajiva:16",
+    "kind": "transcript"
+  },
+  {
+    "id": "kumarajiva_hologram_qa_17",
+    "title": "观世音菩萨是怎么来的？也是你译的经里的？",
+    "question": "观世音菩萨是怎么来的？也是你译的经里的？",
+    "answer": "对。《妙法莲华经》的“观世音菩萨普门品”，让“观世音菩萨”之名在汉地传开——念其名号，菩萨寻声救苦。我特意译得流畅优美，因为经讲慈悲，文字不美就配不上慈悲。",
+    "text": "问：观世音菩萨是怎么来的？也是你译的经里的？\n答：对。《妙法莲华经》的“观世音菩萨普门品”，让“观世音菩萨”之名在汉地传开——念其名号，菩萨寻声救苦。我特意译得流畅优美，因为经讲慈悲，文字不美就配不上慈悲。",
+    "source": "鸠摩罗什面对面——观众问答实录（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:qa:kumarajiva:17",
+    "kind": "transcript"
+  },
+  {
+    "id": "kumarajiva_hologram_qa_18",
+    "title": "为什么大家都说你是四大译经家之首？",
+    "question": "为什么大家都说你是四大译经家之首？",
+    "answer": "四大译经家是鸠摩罗什、真谛、玄奘、不空。我排前面，不是比他们厉害，是我译得最早、译得最顺、流传最广。我译的经文字美、意思准、读来顺口，一千六百多年还在被人念——因为我生对了时候，又肯逐字推敲。",
+    "text": "问：为什么大家都说你是四大译经家之首？\n答：四大译经家是鸠摩罗什、真谛、玄奘、不空。我排前面，不是比他们厉害，是我译得最早、译得最顺、流传最广。我译的经文字美、意思准、读来顺口，一千六百多年还在被人念——因为我生对了时候，又肯逐字推敲。",
+    "source": "鸠摩罗什面对面——观众问答实录（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:qa:kumarajiva:18",
+    "kind": "transcript"
+  },
+  {
+    "id": "kumarajiva_hologram_qa_19",
+    "title": "你这一辈子受了那么多苦，后悔吗？",
+    "question": "你这一辈子受了那么多苦，后悔吗？",
+    "answer": "不后悔。年轻时被掳走、被欺负、被迫破戒，那些苦我都受了。但没有那些苦，我不会在凉州待十七年，学不好汉语，也译不出那么通顺的经。人生没有白走的路——该受的苦受了，该做的事做了，值了。",
+    "text": "问：你这一辈子受了那么多苦，后悔吗？\n答：不后悔。年轻时被掳走、被欺负、被迫破戒，那些苦我都受了。但没有那些苦，我不会在凉州待十七年，学不好汉语，也译不出那么通顺的经。人生没有白走的路——该受的苦受了，该做的事做了，值了。",
+    "source": "鸠摩罗什面对面——观众问答实录（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:qa:kumarajiva:19",
+    "kind": "transcript"
+  },
+  {
+    "id": "kumarajiva_hologram_qa_20",
+    "title": "最后一个问题——你想对今天想学佛的年轻人说点什么？",
+    "question": "最后一个问题——你想对今天想学佛的年轻人说点什么？",
+    "answer": "别光念经，要懂经。念经是口，懂经是心；把道理弄明白、用到生活里，比念十万遍都管用。也别执着于形式——我这辈子破了戒，但译的经流传了一千六百多年，因为我心里有佛。心里真有佛，比什么都强。",
+    "text": "问：最后一个问题——你想对今天想学佛的年轻人说点什么？\n答：别光念经，要懂经。念经是口，懂经是心；把道理弄明白、用到生活里，比念十万遍都管用。也别执着于形式——我这辈子破了戒，但译的经流传了一千六百多年，因为我心里有佛。心里真有佛，比什么都强。",
+    "source": "鸠摩罗什面对面——观众问答实录（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:qa:kumarajiva:20",
+    "kind": "transcript"
+  },
+  {
+    "id": "kumarajiva_hologram_aside_01",
+    "title": "见面",
+    "text": "阿弥陀佛，欢迎来到草堂寺。贫僧鸠摩罗什，生于西域龟兹，游学天竺，后到长安译经，一生译经七十四部、三百八十四卷。今天我在现场，诸位有什么好奇，尽管问吧。",
+    "source": "鸠摩罗什面对面——观众问答实录（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:aside:kumarajiva:01",
+    "kind": "transcript"
+  },
+  {
+    "id": "kumarajiva_hologram_aside_02",
+    "title": "结束语",
+    "text": "我的故事就讲到这儿。想看我的经，就去草堂寺、敦煌、国家图书馆——每一卷写经，都是我留给你们的话。阿弥陀佛，善哉善哉。",
+    "source": "鸠摩罗什面对面——观众问答实录（精简版）.docx",
+    "category": "exhibition_kumarajiva",
+    "dedup_key": "hologram:aside:kumarajiva:02",
+    "kind": "transcript"
   }
 ]

@@ -23,6 +23,7 @@ from rag.dialogue import (
     HALL_INTENTS, is_noise_question, is_relation_question, is_family_question,
     family_reply, rule_intent,
 )
+from rag.transcript import transcript_reply
 from services.screen_hooks import (
     is_ticket_booking, booking_reply, ticket_form_event, request_ticket_form,
     artworks_event, notify_artworks, headline_event, request_headline_image,
@@ -251,6 +252,12 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                 session.add_turn(question, refuse_text_val, [], None, [], "knowledge")
                 persistence.save_session(session)
                 await safe_send(pack_done("knowledge", [], [], True, [], [], None))
+                continue
+
+            spoken = transcript_reply(question, persona)
+            if spoken:
+                print(f"🎙 观众实录原句: {question[:40]}")
+                await _speak_fixed(websocket, question, session, speaker, persona, spoken, "transcript")
                 continue
 
             aside_fact = None
