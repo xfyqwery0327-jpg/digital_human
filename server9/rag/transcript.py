@@ -122,6 +122,43 @@ def clean_answer(parts) -> str:
     return _SPEAKER.sub("", text).strip()
 
 
+_LABELED_Q = re.compile(r"^观众提问[：:]\s*(.*)$")
+_LABELED_A = re.compile(r"^(?:妇好|莫奈|鸠摩罗什)?台词[：:]\s*(.*)$")
+
+
+def parse_labeled_qa(text: str) -> list:
+    """「观众提问 / 台词」对照稿。一问一句，返回 [{question, answer}]。"""
+    pairs = []
+    question = None
+    answer_parts = []
+
+    def flush():
+        nonlocal question, answer_parts
+        answer = "".join(part.strip() for part in answer_parts if part and part.strip())
+        if question and answer:
+            pairs.append({"question": question, "answer": answer})
+        question = None
+        answer_parts = []
+
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        asked = _LABELED_Q.match(line)
+        if asked:
+            flush()
+            question = asked.group(1).strip()
+            continue
+        spoken = _LABELED_A.match(line)
+        if spoken and question:
+            answer_parts.append(spoken.group(1))
+            continue
+        if question and answer_parts:
+            answer_parts.append(line)
+    flush()
+    return [row for row in pairs if row["question"] and row["answer"]]
+
+
 def parse_transcript(paragraphs) -> list:
     """观众问答。返回 [{question, answer}]。开场和结束语不放进可照搬的问句。"""
     paragraphs = _drop_banner(paragraphs)

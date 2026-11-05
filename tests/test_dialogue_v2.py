@@ -63,7 +63,9 @@ def test_weather_second_turn_has_no_digits():
     assert "{" not in first and "reply_text" not in second
     hooks = suggest_hooks("weather", mem, persona)
     assert hooks == ["了解完天气，您还想了解博博会或宽创展台的哪些内容呢？"]
-    assert hooks[0] in first and hooks[0] in second
+    from rag.bobohui import spoken_closings
+    assert any(line in first for line in spoken_closings("天气"))
+    assert any(line in second for line in spoken_closings("天气"))
 
 
 def test_weather_fact_then_back_to_hall():
@@ -196,7 +198,8 @@ def test_v1_chinese_scenes_stay_plain_speech():
     weather_hooks = suggest_hooks("weather", mem, persona)
     assert "摄氏度" in weather and "博博会" in weather
     assert weather_hooks == ["了解完天气，您还想了解博博会或宽创展台的哪些内容呢？"]
-    assert weather.endswith(weather_hooks[0])
+    from rag.bobohui import spoken_closings
+    assert any(weather.endswith(line) for line in spoken_closings("天气"))
     assert "{" not in weather
 
     mem2 = RealtimeMemory()
@@ -238,11 +241,14 @@ def test_v1_chinese_scenes_stay_plain_speech():
 
 
 def test_spoken_followup_after_answer():
+    from rag.bobohui import spoken_closings
     body = "睡莲是我在吉维尼画的。"
     spoken = append_spoken_followup(body, "exhibit")
-    assert spoken == body + spoken_followup("exhibit")
-    assert spoken.endswith("您还想了解博博会或宽创展台的哪些内容呢？")
-    weather = "海口今天多云。" + spoken_followup("weather")
+    assert spoken == body + spoken_followup("exhibit", body)
+    assert spoken_followup("exhibit", body) in spoken_closings("我的作品")
+    seen = {spoken_followup("exhibit", "口播%d。" % i) for i in range(24)}
+    assert len(seen) >= 4
+    weather = "海口今天多云。" + spoken_followup("weather", "海口今天多云。")
     assert append_spoken_followup(weather, "weather") == weather
     ticket = "好的，预约窗口已经打开。"
     assert append_spoken_followup(ticket, "ticket_service") == ticket
@@ -250,7 +256,7 @@ def test_spoken_followup_after_answer():
     visit = visit_fact_reply("展览在哪里举办", _persona("monet"))
     asked = append_spoken_followup(visit, "visit")
     assert asked.startswith(visit)
-    assert "了解完展会安排" in asked
+    assert any(asked.endswith(line) for line in spoken_closings("展会安排"))
 
 
 def test_foreign_and_hook_limit():

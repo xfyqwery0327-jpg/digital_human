@@ -221,19 +221,11 @@ def _return_clause(first: str, again: str) -> str:
     return again or ""
 
 
-def _hall_hook(persona, kind: str = "") -> str:
-    """天气说完问了解完天气，新闻说完问了解完新闻。"""
-    del persona
-    from rag.bobohui import hall_hook
-    topic = "新闻" if kind == "news" else "天气"
-    return hall_hook(topic)
-
-
 def realtime_reply(session, persona, fact: str = "", kind: str = "") -> str:
-    """播完查到的事实，再按刚讲的内容加一句钩子。没查到就只说这句钩子。"""
+    """播完查到的事实，再补一句请游客继续问。没查到就只说这句问话。"""
     kind = kind or getattr(session, "last_realtime_kind", "") or "weather"
-    hook = _hall_hook(persona, kind)
     fact = (fact or "").strip()
+    hook = spoken_followup(kind, fact, persona)
     if not fact:
         return hook
     if fact[-1] not in "。！？":
@@ -302,19 +294,43 @@ def suggest_hooks(intent: str, session, persona, names: List[str] = None) -> Lis
     return [hall_hook(HOOK_TOPIC.get(intent, "这些"))]
 
 
-def spoken_followup(intent: str) -> str:
-    """口播收尾的那一句问话。预约和指令不加。"""
-    hooks = suggest_hooks(intent or "knowledge", None, None)
-    return hooks[0] if hooks else ""
+def spoken_topic(intent: str, persona=None) -> str:
+    """句尾问的是谁的事。莫奈问作品，妇好问经历，鸠摩罗什问经历，不把别人说成作品。"""
+    from rag.bobohui import HOOK_TOPIC
+    topic = HOOK_TOPIC.get(intent or "knowledge", "这些")
+    pid = persona if isinstance(persona, str) else (getattr(persona, "id", "") or "")
+    if topic != "我的作品":
+        return topic
+    if pid == "fuhao":
+        return "我的器物" if intent == "exhibit" else "我的经历"
+    if pid == "kumarajiva":
+        return "我的译经" if intent == "exhibit" else "我的经历"
+    return topic
 
 
-def append_spoken_followup(text: str, intent: str) -> str:
-    """讲完再问一句，请游客继续问。正文里已经有同一句就不再加。"""
+def spoken_followup(intent: str, text: str = "", persona=None) -> str:
+    """口播收尾的那一句问话。同一段正文用同一句，不同正文换着问。预约和指令不加。"""
+    if intent in ("command", "ticket_service"):
+        return ""
+    from rag.bobohui import pick_spoken_closing
+    return pick_spoken_closing(spoken_topic(intent, persona), text or intent or "knowledge")
+
+
+def append_spoken_followup(text: str, intent: str, persona=None) -> str:
+    """讲完再问一句，请游客继续问。正文已经在发问，或已经问过，就不再加。"""
     raw = (text or "").strip()
     if not raw or raw.startswith("这个我还不太清楚") or raw.startswith("抱歉"):
         return raw
-    hook = spoken_followup(intent)
-    if not hook or hook in raw:
+    if raw.endswith("？") or raw.endswith("?"):
+        return raw
+    if intent in ("command", "ticket_service"):
+        return raw
+    from rag.bobohui import spoken_closings
+    pool = spoken_closings(spoken_topic(intent, persona))
+    if any(line and line in raw for line in pool):
+        return raw
+    hook = spoken_followup(intent, raw, persona)
+    if not hook:
         return raw
     if raw[-1] not in "。！？":
         raw += "。"

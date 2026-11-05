@@ -11,7 +11,8 @@ if str(SERVER9) not in sys.path:
     sys.path.insert(0, str(SERVER9))
 
 from rag.transcript import (  # noqa: E402
-    match_transcript, paragraphs_of_docx, parse_narrative, parse_transcript, question_score,
+    match_transcript, paragraphs_of_docx, parse_labeled_qa, parse_narrative, parse_transcript,
+    question_score,
 )
 
 SRC = Path(r"C:\Users\BroadMesse\Desktop\全息柜人物数据导入")
@@ -55,6 +56,21 @@ def test_each_persona_keeps_its_own_answer():
     assert tongue.startswith("是真的")
     assert "鸠摩罗什：" not in tongue
     assert match_transcript("“印象派”这个名字是什么意思呀？", luo) == ""
+
+
+def test_fuhao_booth_questions_are_copied():
+    text = (ROOT / "kb" / "fuhao" / "sources" / "问答对.txt").read_text(encoding="utf-8")
+    rows = parse_labeled_qa(text)
+    assert len(rows) == 4
+    oracle = match_transcript("听说您会占卜？", rows)
+    assert oracle.startswith("对。古时凡事问天") and "三个关键词" in oracle
+    battle = match_transcript("您作为将军，哪场战役是你印象最深刻的？", rows)
+    assert battle.startswith("印象最深的是伐羌方") and "一万三千" in battle
+    wine = match_transcript("听说您还会制酒？", rows)
+    assert "鬯酒" in wine and "鸮尊盛酒" in wine
+    owl = match_transcript("那可以详细讲讲这件妇好鸮尊吗？", rows)
+    assert owl.startswith("鸮尊是我墓中代表性青铜酒礼器") and "妇好" in owl
+    assert match_transcript("你打过最厉害的一仗是哪场？", rows) == ""
 
 
 def test_narrative_keeps_ten_pieces():

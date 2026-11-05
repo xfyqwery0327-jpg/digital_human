@@ -460,7 +460,7 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
         from rag.dialogue import append_spoken_followup
         spoken = (text or "").strip()
         if ask and not refused:
-            spoken = append_spoken_followup(spoken, intent)
+            spoken = append_spoken_followup(spoken, intent, persona)
         if remember:
             _remember(intent, spoken, hall=hall, refused=refused)
         await send_llm_answer(spoken)
@@ -990,9 +990,9 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
                             from rag.dialogue import append_spoken_followup, spoken_followup
                             llm_answer = strip_unasked_here(user_question, llm_answer)
                             before = llm_answer
-                            llm_answer = append_spoken_followup(llm_answer, route_intent)
+                            llm_answer = append_spoken_followup(llm_answer, route_intent, persona)
                             if llm_answer != before:
-                                follow_hook = spoken_followup(route_intent)
+                                follow_hook = spoken_followup(route_intent, before, persona)
                         print(f"✅ LLM 回答: {llm_answer[:50]}... | 总耗时 {time.time()-t0:.2f}s")
                         await send_llm_answer(llm_answer)
                         if follow_hook:

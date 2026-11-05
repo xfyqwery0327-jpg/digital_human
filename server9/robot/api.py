@@ -449,7 +449,7 @@ async def _robot_run_turn(request_id: str, query: str, speaker: str,
             kind = rule_intent(query, session) or ("chitchat" if is_greeting(query) else "knowledge")
             if kind == "lang_switch":
                 kind = "knowledge"
-            speak_text = append_spoken_followup(speak_text, kind)
+            speak_text = append_spoken_followup(speak_text, kind, persona_id)
         if speak_text and spoken_code != "zh":
             speak_text = await loop.run_in_executor(
                 None, lambda text=speak_text, lang=spoken_code: prepare_spoken(text, lang))

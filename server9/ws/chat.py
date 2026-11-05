@@ -107,7 +107,7 @@ async def handle_ticket_booking(websocket: WebSocket, question: str, session: Se
 async def handle_chitchat(websocket: WebSocket, question: str, session: SessionState, speaker: str,
                           persona=None):
     from rag.dialogue import append_spoken_followup
-    reply = append_spoken_followup(chitchat_reply(question, persona), "chitchat")
+    reply = append_spoken_followup(chitchat_reply(question, persona), "chitchat", persona)
     await _send_reply_with_audio(websocket, reply, speaker)
     hooks = suggest_hooks("chitchat", session, persona)
     session.add_turn(question, reply, [], None, [], "chitchat")
@@ -119,7 +119,7 @@ async def _speak_fixed(websocket, question, session, speaker, persona, reply, in
     """固定口播。讲完补一句请游客继续问。新闻附上列表里的 url 和缩略图。"""
     from rag.dialogue import append_spoken_followup
     from rag.speech_lang import prepare_spoken, reply_lang_of
-    reply = append_spoken_followup(reply, intent)
+    reply = append_spoken_followup(reply, intent, persona)
     code = reply_lang_of(session)
     if code != "zh" and reply:
         loop = asyncio.get_running_loop()
@@ -546,9 +546,9 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                     from rag.dialogue import append_spoken_followup, spoken_followup
                     full_answer = strip_unasked_here(question, full_answer)
                     before = full_answer
-                    full_answer = append_spoken_followup(full_answer, route_intent)
+                    full_answer = append_spoken_followup(full_answer, route_intent, persona)
                     if full_answer != before:
-                        hook = spoken_followup(route_intent)
+                        hook = spoken_followup(route_intent, before, persona)
                         await safe_send({"type": "text", "content": hook})
                         await enqueue_sentence(hook)
                 print(f"✅ LLM 回答完成，耗时 {time.time()-t0:.2f}s")

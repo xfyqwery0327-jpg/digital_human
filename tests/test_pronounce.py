@@ -16,7 +16,7 @@ def test_qiuci_and_other_polyphones_become_homophones():
     assert "鸠摩罗石" in spoken
     assert "奇婆" in spoken
     assert "记宾" in spoken
-    assert pronounce_for_tts("妇好在殷墟见过司母戊，也见过单于。") == "妇郝在阴虚见过司母务，也见过蝉于。"
+    assert pronounce_for_tts("妇好在殷墟见过司母戊，也见过单于。") == "妇浩在阴虚见过司母务，也见过蝉于。"
     assert pronounce_for_tts("勒阿弗尔的光") == "叻阿弗尔的光"
 
 

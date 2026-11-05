@@ -17,7 +17,8 @@ if str(SERVER9) not in sys.path:
     sys.path.insert(0, str(SERVER9))
 
 from rag.transcript import (  # noqa: E402
-    paragraphs_of_docx, parse_narrative, parse_transcript, parse_transcript_aside,
+    normalize_question, paragraphs_of_docx, parse_labeled_qa, parse_narrative,
+    parse_transcript, parse_transcript_aside,
 )
 
 DEFAULT_SRC = Path(r"C:\Users\BroadMesse\Desktop\全息柜人物数据导入")
@@ -144,13 +145,15 @@ def import_all(src: Path) -> None:
         sources.mkdir(parents=True, exist_ok=True)
         shutil.copy2(self_path, sources / self_path.name)
         shutil.copy2(qa_path, sources / qa_path.name)
+        extra_rows, extra_pairs = _booth_qa(pid, category)
+        transcript = _merge_transcript(transcript, extra_pairs)
         transcript_path = ROOT / "kb" / pid / "transcript.json"
         transcript_path.write_text(json.dumps(transcript, ensure_ascii=False, indent=2), encoding="utf-8")
         chunks_path = ROOT / "kb" / pid / "chunks.json"
-        chunks = _merge(_load_json(chunks_path), fresh)
+        chunks = _add_missing(_merge(_load_json(chunks_path), fresh), extra_rows)
         chunks_path.write_text(json.dumps(chunks, ensure_ascii=False, indent=2), encoding="utf-8")
-        live = _merge(_load_json(ROOT / "index" / pid / "items.json"), fresh)
-        print(pid, "self", len(narrative), "qa", len(qa), "live", len(live))
+        live = _add_missing(_merge(_load_json(ROOT / "index" / pid / "items.json"), fresh), extra_rows)
+        print(pid, "self", len(narrative), "qa", len(qa), "extra", len(extra_pairs), "live", len(live))
         _rebuild(pid, live, model)
 
 
@@ -254,9 +257,120 @@ def _sync_hologram_chunks(pid: str, items: list) -> None:
     _replace_text(chunks_path, json.dumps(chunks, ensure_ascii=False, indent=2))
 
 
+def _booth_qa(pid: str, category: str) -> tuple:
+    """展台后补的问答对。不占用全息柜稿的 hologram 编号，整库重导时仍保留。"""
+    import hashlib
+    path = ROOT / "kb" / pid / "sources" / "问答对.txt"
+    if not path.is_file():
+        return [], []
+    pairs = parse_labeled_qa(path.read_text(encoding="utf-8"))
+    rows = []
+    kept = []
+    for pair in pairs:
+        question = (pair.get("question") or "").strip()
+        answer = (pair.get("answer") or "").strip()
+        if not question or not answer:
+            continue
+        digest = hashlib.sha1(normalize_question(question).encode("utf-8")).hexdigest()[:8]
+        rows.append({
+            "id": "%s_booth_qa_%s" % (pid, digest),
+            "title": question,
+            "question": question,
+            "answer": answer,
+            "text": "问：%s\n答：%s" % (question, answer),
+            "source": path.name,
+            "category": category,
+            "dedup_key": "booth:qa:%s:%s" % (pid, digest),
+            "kind": "transcript",
+        })
+        kept.append({"question": question, "answer": answer})
+    return rows, kept
+
+
+def _merge_transcript(existing: list, extra: list) -> list:
+    seen = {normalize_question(row.get("question") or "") for row in existing}
+    merged = list(existing)
+    for row in extra:
+        key = normalize_question(row.get("question") or "")
+        if not key or key in seen:
+            continue
+        merged.append({"question": row["question"], "answer": row["answer"]})
+        seen.add(key)
+    return merged
+
+
+def _add_missing(existing: list, extra: list) -> list:
+    have = {row.get("dedup_key") for row in existing}
+    merged = list(existing)
+    for row in extra:
+        if row.get("dedup_key") in have:
+            continue
+        merged.append(row)
+        have.add(row.get("dedup_key"))
+    return merged
+
+
+def append_booth_qa(pid: str) -> None:
+    """把 sources/问答对.txt 补进实录和向量索引，只给新问句算向量。"""
+    import faiss
+    import jieba
+    import numpy as np
+    from config import DICT_PATH
+
+    category = next(item[2] for item in PERSONAS if item[0] == pid)
+    rows, pairs = _booth_qa(pid, category)
+    if not rows:
+        raise FileNotFoundError("%s 没有可导入的问答对" % pid)
+    transcript_path = ROOT / "kb" / pid / "transcript.json"
+    transcript = _merge_transcript(_load_json(transcript_path), pairs)
+    _replace_text(transcript_path, json.dumps(transcript, ensure_ascii=False, indent=2))
+    chunks_path = ROOT / "kb" / pid / "chunks.json"
+    chunks = _add_missing(_load_json(chunks_path), rows)
+    _replace_text(chunks_path, json.dumps(chunks, ensure_ascii=False, indent=2))
+
+    live_path = ROOT / "index" / pid / "items.json"
+    items = _load_json(live_path)
+    fresh = [row for row in rows if row["dedup_key"] not in {item.get("dedup_key") for item in items}]
+    if not fresh:
+        print(pid, "booth qa already in", len(rows))
+        _copy_draft(pid)
+        return
+    if DICT_PATH.exists():
+        jieba.load_userdict(str(DICT_PATH))
+    model = _embedder()
+    vecs = model.encode(
+        [row["text"] for row in fresh], normalize_embeddings=True,
+        show_progress_bar=False).astype("float32")
+    index_path = ROOT / "index" / pid / "faiss.index"
+    index = faiss.read_index(str(index_path))
+    if index.ntotal != len(items):
+        raise RuntimeError("%s 向量数 %s 和条目 %s 不一致" % (pid, index.ntotal, len(items)))
+    index.add(np.ascontiguousarray(vecs))
+    items.extend(fresh)
+    staged = index_path.with_suffix(".index.staged")
+    faiss.write_index(index, str(staged))
+    staged.replace(index_path)
+    _replace_text(live_path, json.dumps(items, ensure_ascii=False, indent=2))
+    fmap = json.loads((ROOT / "index" / pid / "faiss_map.json").read_text(encoding="utf-8"))
+    fmap.extend(range(len(fmap), len(fmap) + len(fresh)))
+    _replace_text(ROOT / "index" / pid / "faiss_map.json", json.dumps(fmap, ensure_ascii=False))
+    with open(ROOT / "index" / pid / "bm25.pkl", "rb") as handle:
+        packed = pickle.load(handle)
+    docs = packed["docs"]
+    if len(docs) != index.ntotal - len(fresh):
+        raise RuntimeError("%s bm25 %s 和原条目数不一致" % (pid, len(docs)))
+    docs.extend(list(jieba.cut(row["text"])) for row in fresh)
+    _replace_pickle(ROOT / "index" / pid / "bm25.pkl", {"docs": docs})
+    _copy_draft(pid)
+    print(pid, "booth qa added", len(fresh), "vectors", int(index.ntotal))
+
+
 if __name__ == "__main__":
     folder = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_SRC
     if str(folder) == "aside":
         append_asides(DEFAULT_SRC)
+    elif str(folder) == "booth-qa":
+        who = sys.argv[2] if len(sys.argv) > 2 else "fuhao"
+        append_booth_qa(who)
     else:
         import_all(folder)

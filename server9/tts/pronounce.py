@@ -21,7 +21,7 @@ _READINGS = (
 
 
 def pronounce_for_tts(text: str) -> str:
-    """只改送进合成器的字符串。龟兹读丘慈，什读石，妇好的好读郝。"""
+    """只改送进合成器的字符串。龟兹读丘慈，什读石，妇好的好读四声浩。"""
     raw = text or ""
     if not raw:
         return raw
