@@ -80,13 +80,14 @@ def test_other_persona_and_unrelated_query_skip_script():
 
 
 def test_what_else_can_you_do_lists_five_functions():
-    text = capability_reply("莫奈，你还能干什么呢？")
-    assert text.startswith("我这个数字人能做五件事。")
-    for name in ("知识问答对话", "重点文物", "展品的展示与介绍", "参观预约", "导览图浏览", "扫一扫码"):
+    text = capability_reply("莫奈，你还有什么功能？")
+    assert text.startswith("我本事可不少，给您数五样：")
+    for name in ("陪您聊", "带您看展品", "帮您约门票", "给您带路", "扫码进手机", "您想先试哪一项呢？"):
         assert name in text
     for banned in ("作品", "睡莲", "日出", "印象", "吉维尼"):
         assert banned not in text
-    assert capability_reply("你还能干什么呢") == text
+    assert capability_reply("你还有什么功能") == text
+    assert capability_reply("莫奈，你还能干什么呢？") == text
     assert capability_reply("你还能做些什么") == text
     assert capability_reply("好的，你一生都有哪些作品啊") == ""
     assert capability_reply("听说你眼睛后来不好了？那怎么还能画画？") == ""
