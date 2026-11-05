@@ -213,28 +213,82 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
             return
         await safe_send(obj)
 
+    sent_target = ""
+    screen_message = {"intentionType": "talk", "targetName": ""}
+    held_frames = []
+    wire_lock = asyncio.Lock()
+
+    def _intention_for(reply: str) -> dict:
+        return intention_event(
+            user_question, reply, persona,
+            control_box.get("classified_intent") or "")
+
+    def _remember_screen(msg: dict) -> None:
+        nonlocal sent_target
+        screen_message["intentionType"] = (msg or {}).get("intentionType") or "talk"
+        screen_message["targetName"] = (msg or {}).get("targetName") or ""
+        sent_target = screen_message["targetName"]
+
     async def ensure_started(text_hint: str = ""):
         nonlocal started
-        if not started:
-            started = True
-            reply = (control_box.get("reply") or "").strip() or (text_hint or "").strip()
-            event = intention_event(
-                user_question, reply, persona,
-                control_box.get("classified_intent") or "")
-            msg = event.get("message") or {}
-            print(f"🎯 屏幕意图: {msg.get('intentionType')} "
-                  f"target={msg.get('targetName') or '-'} session={session_id[:8]}")
-            await emit(event)
-            start = {"type": "tts_start", "session_id": session_id,
-                     "format": "pcm", "sample_rate": tts_output_rate(),
-                     "channels": 1, "sample_width": 2, "text": text_hint}
-            start.update(control_box.get("news_card") or {})
-            await emit(start)
+        if started:
+            return
+        # 首句往往是「我在这里」，作品名在后面。整段口播齐了再开屏幕，避免先发出空 targetName。
+        if not control_box.get("reply_final"):
+            return
+        started = True
+        reply = (
+            (control_box.get("reply") or "").strip()
+            or (control_box.get("partial") or "").strip()
+            or (text_hint or "").strip()
+        )
+        event = _intention_for(reply)
+        msg = event.get("message") or {}
+        _remember_screen(msg)
+        print(f"🎯 屏幕意图: {screen_message['intentionType']} "
+              f"target={sent_target or '-'} session={session_id[:8]}")
+        await emit(event)
+        start = {"type": "tts_start", "session_id": session_id,
+                 "format": "pcm", "sample_rate": tts_output_rate(),
+                 "channels": 1, "sample_width": 2, "text": text_hint,
+                 "message": dict(screen_message)}
+        start.update(control_box.get("news_card") or {})
+        await emit(start)
+
+    async def _open_screen(text_hint: str = "", answer: dict = None) -> None:
+        """整段口播已齐。顺序：intention、tts_start、llm_answer，再放出暂存音频。
+
+        锁住这一段，避免合成协程把音频插到 llm_answer 前面。
+        """
+        async with wire_lock:
+            control_box["reply_final"] = True
+            await ensure_started(text_hint)
+            if answer is not None:
+                reply = (control_box.get("reply") or "").strip()
+                if started and reply:
+                    event = _intention_for(reply)
+                    name = (event.get("message") or {}).get("targetName") or ""
+                    if name != sent_target:
+                        _remember_screen(event.get("message") or {})
+                        print(f"🎯 屏幕意图更新: {screen_message['intentionType']} "
+                              f"target={sent_target or '-'} session={session_id[:8]}")
+                        await emit(event)
+                answer["message"] = dict(screen_message)
+                await emit(answer)
+            pending = list(held_frames)
+            held_frames.clear()
+            for obj in pending:
+                await emit(obj)
 
     async def gated_send(obj: dict):
-        if obj.get("type") in ("tts_chunk", "tts_sentence") and not started:
-            await ensure_started(obj.get("text") or "")
-        await emit(obj)
+        kind = obj.get("type")
+        async with wire_lock:
+            if kind in ("tts_chunk", "tts_sentence") and not started:
+                if not control_box.get("reply_final"):
+                    held_frames.append(obj)
+                    return
+                await ensure_started(obj.get("text") or "")
+            await emit(obj)
 
     _spoken_cache = {}
 
@@ -252,15 +306,36 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
         _spoken_cache[key] = out
         return out
 
+    async def refresh_work_target():
+        """整段口播出来后，若作品名比首句更完整，再推一次 intention。"""
+        if not started:
+            return
+        reply = (control_box.get("reply") or "").strip()
+        if not reply:
+            return
+        event = _intention_for(reply)
+        name = (event.get("message") or {}).get("targetName") or ""
+        if name == sent_target:
+            return
+        _remember_screen(event.get("message") or {})
+        print(f"🎯 屏幕意图更新: {screen_message['intentionType']} "
+              f"target={sent_target or '-'} session={session_id[:8]}")
+        await emit(event)
+
     async def send_llm_answer(text: str):
-        text = await localize(text)
-        if text:
-            dialogue_state.last_answer = text
-            control_box["reply"] = text
-        await ensure_started(text)
-        answer = {"type": "llm_answer", "session_id": session_id, "text": text}
+        raw = (text or "").strip()
+        spoken = await localize(raw)
+        shown = spoken or raw
+        if shown:
+            dialogue_state.last_answer = shown
+        if raw:
+            control_box["reply"] = raw
+        elif shown:
+            control_box["reply"] = shown
+        await refresh_work_target()
+        answer = {"type": "llm_answer", "session_id": session_id, "text": shown}
         answer.update(control_box.get("news_card") or {})
-        await emit(answer)
+        await _open_screen(shown, answer)
 
     async def _emit_tts_end():
         """游客被机器人接管时不发 tts_end，一轮 ask 只允许 robot stream 发一次 end。
@@ -278,16 +353,19 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
             print(f"⏭ 跳过旧会话 tts_end session={session_id[:8]}")
             return
         was_cancelled = bool(cancelled or cancel_ev.is_set())
-        if not started and was_cancelled:
+        if not started and was_cancelled and not held_frames:
             return
-        await ensure_started()
+        if not control_box.get("reply"):
+            control_box["reply"] = (control_box.get("partial") or "").strip()
+        await _open_screen()
         end = {"type": "tts_end", "session_id": session_id,
                "seq_count": seq, "sentence_count": sent_idx,
                "cancelled": was_cancelled,
                "intent": control_box.get("intent") or "knowledge",
                "lang": "zh",
                "hook_suggest": list(control_box.get("hook_suggest") or []),
-               "exhibit_names": list(control_box.get("exhibit_names") or [])}
+               "exhibit_names": list(control_box.get("exhibit_names") or []),
+               "message": dict(screen_message)}
         end.update(control_box.get("news_card") or {})
         if seq <= 0:
             end["audio"] = False
@@ -300,7 +378,7 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
         dialogue_state = RealtimeMemory()
     control_box = {
         "intent": "knowledge", "hook_suggest": [], "exhibit_names": [],
-        "classified_intent": "", "reply": "",
+        "classified_intent": "", "reply": "", "reply_final": False, "partial": "",
     }
 
     def _remember(intent: str, reply: str, hall: bool = False, refused: bool = False):
@@ -351,6 +429,7 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
         sent = await localize(sent)
         if not sent:
             return
+        control_box["partial"] = (control_box.get("partial") or "") + sent
         if planned:
             await ensure_started(sent)
             await audio_queue.put(sent)

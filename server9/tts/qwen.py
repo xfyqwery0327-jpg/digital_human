@@ -315,6 +315,8 @@ def _trim(pcm: bytes, rate: int) -> bytes:
 def _generate(pieces, persona):
     """一次只合成当前这几句。调用方按一句送来，算完立刻推，不等下一批。"""
     from config import QWEN_TTS_GREEDY
+    from tts.pronounce import pronounce_for_tts
+    pieces = [pronounce_for_tts(p) for p in pieces]
     budget = max(codec_budget(p) for p in pieces)
     prompt = _prompt_for(_model, persona)
     greedy = {}
