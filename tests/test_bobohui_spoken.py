@@ -46,6 +46,20 @@ def spoken_lines(persona):
     }
 
 
+def test_unasked_presence_is_removed():
+    from rag.bobohui import strip_unasked_here
+
+    spoken = "我在这里，第十一届博博会的宽创国际展厅里。睡莲是我在吉维尼画的。"
+    assert strip_unasked_here("睡莲是在哪里画的", spoken) == "睡莲是我在吉维尼画的。"
+    assert strip_unasked_here(
+        "介绍一下你自己",
+        "我在这里，就在宽创国际的展厅里。我是莫奈。",
+    ) == "我是莫奈。"
+    kept = "我就在博博会现场的宽创展厅里。第十一届博博会在海南国际会展中心举办。"
+    assert strip_unasked_here("展览在哪里举办", kept) == kept
+    assert strip_unasked_here("介绍一下博博会", kept) == kept
+
+
 def test_three_personas_only_speak_bobohui():
     samples = {}
     for pid in ("monet", "fuhao", "kumarajiva"):

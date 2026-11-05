@@ -11,7 +11,7 @@ from persona.registry import _parse_persona, _yaml_load
 from rag.dialogue import (
     FOREIGN_REPLY, RealtimeMemory, exhibit_names, is_foreign_question,
     note_hall, note_realtime, pack_done, realtime_reply, rule_intent,
-    suggest_hooks, titles_from_items, visit_fact_reply,
+    append_spoken_followup, spoken_followup, suggest_hooks, titles_from_items, visit_fact_reply,
     is_noise_question, is_relation_question, is_family_question, family_reply,
 )
 from rag.scope import is_other_exhibition_query, refuse_text
@@ -235,6 +235,22 @@ def test_v1_chinese_scenes_stay_plain_speech():
     ):
         assert is_foreign_question(question)
     assert "Water" not in FOREIGN_REPLY and "モ" not in FOREIGN_REPLY
+
+
+def test_spoken_followup_after_answer():
+    body = "睡莲是我在吉维尼画的。"
+    spoken = append_spoken_followup(body, "exhibit")
+    assert spoken == body + spoken_followup("exhibit")
+    assert spoken.endswith("您还想了解博博会或宽创展台的哪些内容呢？")
+    weather = "海口今天多云。" + spoken_followup("weather")
+    assert append_spoken_followup(weather, "weather") == weather
+    ticket = "好的，预约窗口已经打开。"
+    assert append_spoken_followup(ticket, "ticket_service") == ticket
+    assert append_spoken_followup("这个我还不太清楚，您可以换个问法。", "knowledge") == "这个我还不太清楚，您可以换个问法。"
+    visit = visit_fact_reply("展览在哪里举办", _persona("monet"))
+    asked = append_spoken_followup(visit, "visit")
+    assert asked.startswith(visit)
+    assert "了解完展会安排" in asked
 
 
 def test_foreign_and_hook_limit():

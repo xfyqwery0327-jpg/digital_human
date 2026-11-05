@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""游客讲解的控制通道：意图短句、按钮钩子、展品名。口播里不放这些字段。"""
+"""游客讲解的控制通道：意图短句、按钮钩子、展品名。讲完再念一句，请游客继续问。"""
 from __future__ import annotations
 import re
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -300,6 +300,25 @@ def suggest_hooks(intent: str, session, persona, names: List[str] = None) -> Lis
         return []
     from rag.bobohui import HOOK_TOPIC, hall_hook
     return [hall_hook(HOOK_TOPIC.get(intent, "这些"))]
+
+
+def spoken_followup(intent: str) -> str:
+    """口播收尾的那一句问话。预约和指令不加。"""
+    hooks = suggest_hooks(intent or "knowledge", None, None)
+    return hooks[0] if hooks else ""
+
+
+def append_spoken_followup(text: str, intent: str) -> str:
+    """讲完再问一句，请游客继续问。正文里已经有同一句就不再加。"""
+    raw = (text or "").strip()
+    if not raw or raw.startswith("这个我还不太清楚") or raw.startswith("抱歉"):
+        return raw
+    hook = spoken_followup(intent)
+    if not hook or hook in raw:
+        return raw
+    if raw[-1] not in "。！？":
+        raw += "。"
+    return raw + hook
 
 
 def visit_fact_reply(question: str, persona) -> str:

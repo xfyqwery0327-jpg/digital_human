@@ -106,7 +106,8 @@ async def handle_ticket_booking(websocket: WebSocket, question: str, session: Se
 
 async def handle_chitchat(websocket: WebSocket, question: str, session: SessionState, speaker: str,
                           persona=None):
-    reply = chitchat_reply(question, persona)
+    from rag.dialogue import append_spoken_followup
+    reply = append_spoken_followup(chitchat_reply(question, persona), "chitchat")
     await _send_reply_with_audio(websocket, reply, speaker)
     hooks = suggest_hooks("chitchat", session, persona)
     session.add_turn(question, reply, [], None, [], "chitchat")
@@ -115,8 +116,10 @@ async def handle_chitchat(websocket: WebSocket, question: str, session: SessionS
 
 
 async def _speak_fixed(websocket, question, session, speaker, persona, reply, intent, news_card=None):
-    """固定口播。钩子只放进 done，不送去合成。新闻附上列表里的 url 和缩略图。"""
+    """固定口播。讲完补一句请游客继续问。新闻附上列表里的 url 和缩略图。"""
+    from rag.dialogue import append_spoken_followup
     from rag.speech_lang import prepare_spoken, reply_lang_of
+    reply = append_spoken_followup(reply, intent)
     code = reply_lang_of(session)
     if code != "zh" and reply:
         loop = asyncio.get_running_loop()
@@ -386,10 +389,11 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                 user_prompt = f"【对话历史】\n{history_text}\n" + user_prompt
             if entity_context:
                 user_prompt = f"【实体上下文】最近提到: {entity_context}\n\n" + user_prompt
+            from rag.bobohui import PRESENCE_RULE
             user_prompt += (
                 "\n\n展会只介绍博博会，不要介绍原先的展，也不要报原先的门票价格。"
                 "问到本人作品或经历时只讲事情本身，不要说这场展有我的作品。"
-                "你人已经在博博会现场，就在宽创国际的展厅里。介绍时说我就在这里，不要说在那里，不要说我听说。\n"
+                + PRESENCE_RULE
             )
             from rag.speech_lang import output_rule, reply_lang_of
             user_prompt += works_answer_hint(question, persona)
@@ -508,6 +512,8 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                             first_sent = True
                         sentence, stop = hall_safe_sentence(sentence)
                         sentence = filter_spoken_sentence(sentence, question, persona, clock_state)
+                        from rag.bobohui import strip_unasked_here
+                        sentence = strip_unasked_here(question, sentence)
                         await enqueue_sentence(sentence)
                         if stop:
                             leaked = True
@@ -520,6 +526,8 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                         tail = strip_identity_opening(tail, persona)
                     tail, stop = hall_safe_sentence(tail)
                     tail = filter_spoken_sentence(tail, question, persona, clock_state)
+                    from rag.bobohui import strip_unasked_here
+                    tail = strip_unasked_here(question, tail)
                     await enqueue_sentence(tail)
                     if stop:
                         leaked = True
@@ -534,6 +542,15 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                         question,
                         clamp_hall_answer(cleaned or refuse_text(persona), persona),
                         persona)
+                    from rag.bobohui import strip_unasked_here
+                    from rag.dialogue import append_spoken_followup, spoken_followup
+                    full_answer = strip_unasked_here(question, full_answer)
+                    before = full_answer
+                    full_answer = append_spoken_followup(full_answer, route_intent)
+                    if full_answer != before:
+                        hook = spoken_followup(route_intent)
+                        await safe_send({"type": "text", "content": hook})
+                        await enqueue_sentence(hook)
                 print(f"✅ LLM 回答完成，耗时 {time.time()-t0:.2f}s")
 
             except Exception as e:
