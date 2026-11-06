@@ -8,7 +8,7 @@ sys.path.insert(0, str(ROOT / "server9"))
 
 from persona.registry import _parse_persona, _yaml_load
 from config import PERSONAS_DIR
-from rag.bobohui import HOOK_TOPIC, hall_hook
+from rag.bobohui import HOOK_TOPIC, hall_hook, spoken_closings
 from rag.scope import is_other_exhibition_query
 from rag.dialogue import RealtimeMemory, note_realtime, realtime_reply, suggest_hooks, visit_fact_reply
 
@@ -46,6 +46,24 @@ def spoken_lines(persona):
     }
 
 
+def test_unasked_presence_is_removed():
+    from rag.bobohui import strip_unasked_here
+
+    spoken = "我在这里，第十一届博博会的宽创国际展厅里。睡莲是我在吉维尼画的。"
+    assert strip_unasked_here("睡莲是在哪里画的", spoken) == "睡莲是我在吉维尼画的。"
+    assert strip_unasked_here(
+        "介绍一下你自己",
+        "我在这里，就在宽创国际的展厅里。我是莫奈。",
+    ) == "我是莫奈。"
+    kept = "我就在博博会现场的宽创展厅里。第十一届博博会在海南国际会展中心举办。"
+    assert strip_unasked_here("展览在哪里举办", kept) == kept
+    assert strip_unasked_here("介绍一下博博会", kept) == kept
+    assert strip_unasked_here(
+        "介绍一下妇好鸮尊",
+        "我在这里。就在博博会宽创展厅里。鸮尊是酒器。",
+    ) == "鸮尊是酒器。"
+
+
 def test_three_personas_only_speak_bobohui():
     samples = {}
     for pid in ("monet", "fuhao", "kumarajiva"):
@@ -67,8 +85,8 @@ def test_three_personas_only_speak_bobohui():
         assert "在那里" not in lines["开放时间"] and "我听说" not in lines["开放时间"]
         assert "不要说在那里" in prompt and "不要说我听说" in prompt
         assert is_other_exhibition_query("浪漫与星辰什么时候开展", persona)
-        assert lines["天气口播"].endswith(hall_hook("天气"))
-        assert lines["新闻口播"].endswith(hall_hook("新闻"))
+        assert any(lines["天气口播"].endswith(line) for line in spoken_closings("天气"))
+        assert any(lines["新闻口播"].endswith(line) for line in spoken_closings("新闻"))
         assert "http" not in lines["新闻口播"]
         for intent, hooks in lines["钩子"].items():
             assert hooks == [hall_hook(HOOK_TOPIC[intent])], (pid, intent, hooks)

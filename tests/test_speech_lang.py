@@ -78,7 +78,7 @@ def test_polish_report_failures_without_model():
     assert "博博会" not in got and "中国博物館エキスポ" in got and "紹介" in got
 
     booth = "我在这里，就在宽创国际的展厅里。"
-    assert polish_spoken(booth, "zh").startswith("我就在博博会现场的宽创展厅里。")
+    assert polish_spoken(booth, "zh") == booth
     assert "/no_think" not in polish_spoken("OK.\n/no_think", "en")
     assert polish_spoken("예를 들어, 金刚경입니다.", "ko") == "예를 들어, 금강경입니다."
 

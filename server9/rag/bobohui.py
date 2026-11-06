@@ -23,8 +23,38 @@ WHEN_WHERE = (
 )
 NO_OLD_TICKET = "原先的门票价格我不介绍。"
 PRESENCE_RULE = (
-    "你人已经在博博会现场，就在宽创国际的展厅里。"
-    "介绍时说我就在这里，不要说在那里，不要说我听说。"
+    "你人就在博博会现场的宽创展厅里，这是事实，但不要主动报位置。"
+    "不要说在那里，不要说我听说。"
+    "只有观众问你在哪里、展厅在哪、人在不在现场时，才说我就在这里。"
+    "讲作品、经历、器物或其他问题时，开口就是答案本身，不要先说我在这里。\n"
+)
+_WHERE = re.compile(
+    r"(?:你|人|咱们|我们).{0,4}在哪|"
+    r"展[厅台].{0,6}在哪|"
+    r"在哪里举办|哪里举办|哪个馆|什么地方办|"
+    r"人在不在|你在不在|是不是在现场"
+)
+_PRESENCE_LEAD = re.compile(
+    r"^(?:"
+    r"我(?:此刻|就)?在这里[，,]"
+    r"|我(?:此刻)?就在(?:这场)?博博会现场(?:的)?(?:宽创(?:国际)?)?(?:的)?展[厅台]里[，,]?"
+    r"|人就在宽创(?:国际)?的展[厅台]里[，,]?"
+    r")"
+)
+_PRESENCE_START = (
+    "我在这里", "我就在这里", "我此刻就在", "我此刻在这里",
+    "我就在博博会", "我就在这场", "人就在宽创",
+    "就在博博会", "就在宽创", "就在这场",
+)
+_PRESENCE_ONLY = re.compile(
+    r"^(?:就在|人就在|我(?:此刻)?就在)"
+    r"(?:这场)?博博会(?:现场)?(?:的)?(?:宽创(?:国际)?)?(?:的)?"
+    r"(?:展厅|展台|站台)?[里中]?[。！？]?$"
+)
+_LOC_FILL = re.compile(
+    r"我(?:此刻|就)?在这里|我(?:此刻)?就在|人就在|这场|博博会|现场|"
+    r"宽创国际|宽创|展厅|展台|站台|第十一届|"
+    r"中国博物馆及相关产品与技术博览会|正在|举行|里|的"
 )
 HOOK_TOPIC = {
     "weather": "天气",
@@ -42,13 +72,83 @@ HOOK_TOPIC = {
 
 
 def hall_hook(topic: str) -> str:
-    """了解完刚讲的内容，再问还想了解博博会或宽创展台的什么。"""
+    """了解完刚讲的内容，再问还想了解博博会或宽创展台的什么。屏幕按钮用这一句。"""
     topic = re.sub(r"\s+", "", topic or "") or "这些"
     return "了解完%s，您还想了解博博会或宽创展台的哪些内容呢？" % topic
 
 
+def spoken_closings(topic: str) -> list:
+    """口播句尾的几种问法。同一话题不要每次都念同一句。"""
+    topic = re.sub(r"\s+", "", topic or "") or "这些"
+    return [
+        hall_hook(topic),
+        "关于%s，还想再听一段，还是换个博博会的话题？" % topic,
+        "%s先讲到这儿。您要是想问博博会或宽创展台，直接说就行。" % topic,
+        "我还能接着讲。您是想继续听%s，还是看看这届博博会？" % topic,
+        "还有想了解的，尽管问。博博会和宽创展台的事我都可以说。",
+        "您再挑一个问题吧。可以接着问%s，也可以问这届博博会。" % topic,
+    ]
+
+
+def pick_spoken_closing(topic: str, seed: str = "") -> str:
+    """按刚讲完的正文挑一句，同一段话每次挑到的问法相同。"""
+    import zlib
+    pool = spoken_closings(topic)
+    if not pool:
+        return ""
+    key = (seed or topic or "这些").strip()
+    return pool[zlib.adler32(key.encode("utf-8")) % len(pool)]
+
+
 def is_bobohui_question(question: str) -> bool:
     return bool(_ASK.search(question or ""))
+
+
+def asks_where(question: str) -> bool:
+    """观众在问人在哪、展厅在哪。讲画、讲经历时的「在哪里画的」不算。"""
+    return bool(_WHERE.search(question or ""))
+
+
+def _presence_sentence(sentence: str) -> bool:
+    text = (sentence or "").strip()
+    if _PRESENCE_ONLY.match(text):
+        return True
+    if not text.startswith(_PRESENCE_START):
+        return False
+    bare = re.sub(r"[\s，,。！？、；：]", "", text)
+    rest = _LOC_FILL.sub("", bare)
+    return len(rest) <= 4
+
+
+def _drop_presence_lead(sentence: str) -> str:
+    text = (sentence or "").strip()
+    matched = _PRESENCE_LEAD.match(text)
+    if not matched:
+        return text
+    return text[matched.end():].lstrip("，,。 ")
+
+
+def strip_unasked_here(question: str, text: str) -> str:
+    """没问位置时，去掉开头的「我在这里，就在宽创展厅」。问到哪里举办则保留。"""
+    raw = (text or "").strip()
+    if not raw or asks_where(question) or is_bobohui_question(question):
+        return raw
+    from rag.visit import is_visit_query
+    if is_visit_query(question):
+        return raw
+    parts = re.findall(r"[^。！？]+[。！？]?", raw) or [raw]
+    kept = []
+    for part in parts:
+        piece = part.strip()
+        if not piece:
+            continue
+        if _presence_sentence(piece):
+            continue
+        piece = _drop_presence_lead(piece)
+        if piece:
+            kept.append(piece if piece[-1] in "。！？" else piece)
+    cleaned = "".join(kept).strip()
+    return cleaned or raw
 
 
 def bobohui_hit(question: str):

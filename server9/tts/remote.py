@@ -92,13 +92,15 @@ def speaker_id_of(persona, speaker: str = "") -> str:
 def tts_payload(text: str, speaker_id: str = "monet") -> dict:
     """qwen-tts-service 的请求体。language 用 Chinese / English / Japanese / Korean。"""
     from rag.speech_lang import qwen_language_of
+    from tts.pronounce import pronounce_for_tts
     sid = (speaker_id or "").strip() or "monet"
+    spoken = pronounce_for_tts(text)
     return {
-        "text": text,
+        "text": spoken,
         "speaker_id": sid,
         "format": "pcm",
         "stream": True,
-        "language": qwen_language_of(text),
+        "language": qwen_language_of(spoken),
     }
 
 

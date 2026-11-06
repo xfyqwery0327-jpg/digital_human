@@ -31,16 +31,19 @@ from rag.scope import (
 )
 from rag.visit import visit_hint, guard_hall_clock
 from rag.dialogue import (
-    rule_intent, RealtimeMemory,
+    rule_intent, RealtimeMemory, append_spoken_followup,
     is_noise_question, is_relation_question, is_family_question, family_reply,
 )
+from rag.transcript import transcript_reply
 from services.screen_hooks import (
     is_ticket_booking, booking_reply, ticket_form_event, request_ticket_form,
     headline_event, request_headline_image,
 )
 from robot.hub import robot_hub
 from robot.logutil import dumps, get_logger
-from robot.scripted import match_fixed_script, normalize_ask_mode, scripted_turn
+from robot.scripted import (
+    capability_reply, match_fixed_script, normalize_ask_mode, scripted_turn,
+)
 from robot.stream import push_robot_turn_to_ws
 
 log = get_logger("monet.robot.api", "robot-api.log")
@@ -126,12 +129,13 @@ def _robot_knowledge_turn_locked(question: str, session: SessionState, top_k: in
         system_extra = "\n\n本次是语音口播，回答尽量短，一句为宜，不要超过两句。"
         max_tokens = ASK_MAX_TOKENS
     from rag.speech_lang import output_rule, reply_lang_of
+    from rag.bobohui import PRESENCE_RULE
     user_content = (
         f"【参考资料】\n{ref}\n\n【问题】{question}\n\n"
         f"{works_answer_hint(question, persona)}"
         "展会只介绍博博会，不要介绍原先的展，也不要报原先的门票价格。"
         "问到本人作品或经历时只讲事情本身，不要说这场展有我的作品。"
-        "你人已经在博博会现场，就在宽创国际的展厅里。介绍时说我就在这里，不要说在那里，不要说我听说。\n"
+        f"{PRESENCE_RULE}"
         f"{output_rule(reply_lang_of(session))}"
         f"{visit_hint(question, persona)}"
         f"{length_rule}"
@@ -199,6 +203,8 @@ def _robot_knowledge_turn_locked(question: str, session: SessionState, top_k: in
             text = "抱歉，我现在有点不舒服。"
         else:
             log.warning("LLM 不可用，改用检索原文 chars=%s", spoken_len(text))
+    from rag.bobohui import strip_unasked_here
+    text = strip_unasked_here(question, text)
     sources = [h["id"] for h in hits]
     log.info("讲解生成完成 %.2fs refused=False sources=%s chars=%s text=%s",
              time.time() - t0, sources, spoken_len(text), text[:80])
@@ -285,6 +291,7 @@ async def _robot_run_turn(request_id: str, query: str, speaker: str,
     sources: List[str] = []
     fixed_wav = None
     preserve_text = False
+    skip_followup = False
     news_fields = {}
     round_no = robot_hub.round
     farewell = is_farewell_query(query)
@@ -360,12 +367,33 @@ async def _robot_run_turn(request_id: str, query: str, speaker: str,
             if session:
                 session.add_turn(query, speak_text, [], intent=kind)
                 persistence.save_session(session)
+        elif (spoken := transcript_reply(query, active())):
+            speak_text = spoken
+            preserve_text = True
+            sources = ["transcript"]
+            log.info("ask 实录原句 persona=%s chars=%s query=%s",
+                     persona_id, len(speak_text), (query or "")[:80])
+            round_no = await robot_hub.bump_round()
+            if session:
+                session.add_turn(query, speak_text, sources, intent="transcript")
+                persistence.save_session(session)
         elif is_greeting(query):
             speak_text = pick_hello()
             log.info("ask 欢迎 persona=%s text=%s", persona_id, speak_text[:80])
             round_no = await robot_hub.bump_round()
             if session:
                 session.add_turn(query, speak_text, [], intent="chitchat")
+                persistence.save_session(session)
+        elif (functions := capability_reply(query)):
+            speak_text = functions
+            preserve_text = True
+            skip_followup = True
+            sources = ["capability"]
+            log.info("ask 数字人五项功能 persona=%s chars=%s query=%s",
+                     persona_id, len(speak_text), (query or "")[:80])
+            round_no = await robot_hub.bump_round()
+            if session:
+                session.add_turn(query, speak_text, sources, intent="chitchat")
                 persistence.save_session(session)
         elif (scripted := scripted_turn(persona_id, query, mode)):
             speak_text = scripted["text"]
@@ -414,6 +442,14 @@ async def _robot_run_turn(request_id: str, query: str, speaker: str,
         play_duration = 0.0
         ws_pushed = 0
         spoken_code = reply_lang_of(session)
+        if (
+            speak_text and query and not farewell and not fixed_wav
+            and not refused and not is_ticket_booking(query) and not skip_followup
+        ):
+            kind = rule_intent(query, session) or ("chitchat" if is_greeting(query) else "knowledge")
+            if kind == "lang_switch":
+                kind = "knowledge"
+            speak_text = append_spoken_followup(speak_text, kind, persona_id)
         if speak_text and spoken_code != "zh":
             speak_text = await loop.run_in_executor(
                 None, lambda text=speak_text, lang=spoken_code: prepare_spoken(text, lang))

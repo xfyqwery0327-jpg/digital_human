@@ -342,6 +342,7 @@ async def push_robot_turn_to_ws(speak_text: str, speaker: str,
     hint = sentences[0] if sentences else (speak_text or "")[:40]
     intention_payload = await _resolve_screen_intention(
         query, speak_text, persona_obj)
+    screen_message = dict((intention_payload.get("message") or {}))
     start = {
         "type": "tts_start",
         "session_id": session_id,
@@ -350,13 +351,14 @@ async def push_robot_turn_to_ws(speak_text: str, speaker: str,
         "channels": 1,
         "sample_width": 2,
         "text": hint,
+        "message": screen_message,
     }
     if news_card:
         start.update(news_card)
     await fanout(start)
     log.info("已推 tts_start session=%s robot=%s persona=%s clients=%s sr=%s hint=%s",
              session_id, rid, pid, last_pushed, sr, hint[:40])
-    answer = {"type": "llm_answer", "text": speak_text}
+    answer = {"type": "llm_answer", "text": speak_text, "message": screen_message}
     if news_card:
         answer.update(news_card)
     await fanout(answer)
@@ -597,6 +599,7 @@ async def push_robot_turn_to_ws(speak_text: str, speaker: str,
         "cancelled": bool(cancelled),
         "engine": engine,
         "sample_rate": sr,
+        "message": screen_message,
     }
     end.update(_screen_hooks(asr_text, speak_text, persona_obj, leaked))
     if news_card:

@@ -100,6 +100,43 @@ def fixed_script_wav(persona_id: str, query: str) -> Optional[Path]:
     return _AUDIO_DIR / item["wav"]
 
 
+# 「你还有什么功能」「你还能干什么」不讲作品，直接报这五样。
+_CAPABILITY = re.compile(
+    r"还能(?:干什么|做什么|干嘛|做些什么|做点什么|干些什么)|"
+    r"(?:还有|有)?(?:什么|哪些|啥)功能"
+)
+CAPABILITY_REPLY = (
+    "我本事可不少，给您数五样："
+    "第一，陪您聊，展馆、展会的事，您直接问我就行。"
+    "第二，带您看展品。重点文物、展品，我给您讲，还能放大看细节。"
+    "第三，帮您约门票。说一声就出二维码，扫码就能约。"
+    "第四，给您带路。展台地图我这儿有，想去哪儿我给您画路线。"
+    "第五，扫码进手机。伴游讲解、文创好物都在里面，逛完还能接着看。"
+    "您想先试哪一项呢？"
+)
+
+
+def is_capability_question(query: str) -> bool:
+    """问数字人还能干什么。三段作品稿不走这里。"""
+    q = _norm(query)
+    if not q or _match_item("monet", query):
+        return False
+    return bool(_CAPABILITY.search(q))
+
+
+def capability_reply(query: str) -> str:
+    """五项功能的固定口播。未命中返回空字符串。"""
+    if not is_capability_question(query):
+        return ""
+    return CAPABILITY_REPLY
+
+
+def needs_long_spoken(query: str) -> bool:
+    """这项问题已改为固定口播，不再交给大模型拉长。"""
+    del query
+    return False
+
+
 def normalize_ask_mode(mode) -> int:
     """合法模式原样返回；缺省或无法解析时回到 1。"""
     try:
@@ -112,7 +149,7 @@ def normalize_ask_mode(mode) -> int:
 def scripted_turn(persona_id: str, query: str, mode=ASK_MODE_WAV) -> Optional[dict]:
     """三段固定对话按模式出稿。未命中，或 mode=3，返回 None。
 
-    命中时返回 {"text", "wav", "mode"}。mode=2 的 wav 为 None，改由 CosyVoice 合成。
+    命中时返回 {"text", "wav", "mode"}。mode=2 的 wav 为 None，改由 qwen-tts-service 合成。
     """
     mode = normalize_ask_mode(mode)
     if mode == ASK_MODE_LLM:

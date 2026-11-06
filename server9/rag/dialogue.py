@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""游客讲解的控制通道：意图短句、按钮钩子、展品名。口播里不放这些字段。"""
+"""游客讲解的控制通道：意图短句、按钮钩子、展品名。讲完再念一句，请游客继续问。"""
 from __future__ import annotations
 import re
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -221,19 +221,11 @@ def _return_clause(first: str, again: str) -> str:
     return again or ""
 
 
-def _hall_hook(persona, kind: str = "") -> str:
-    """天气说完问了解完天气，新闻说完问了解完新闻。"""
-    del persona
-    from rag.bobohui import hall_hook
-    topic = "新闻" if kind == "news" else "天气"
-    return hall_hook(topic)
-
-
 def realtime_reply(session, persona, fact: str = "", kind: str = "") -> str:
-    """播完查到的事实，再按刚讲的内容加一句钩子。没查到就只说这句钩子。"""
+    """播完查到的事实，再补一句请游客继续问。没查到就只说这句问话。"""
     kind = kind or getattr(session, "last_realtime_kind", "") or "weather"
-    hook = _hall_hook(persona, kind)
     fact = (fact or "").strip()
+    hook = spoken_followup(kind, fact, persona)
     if not fact:
         return hook
     if fact[-1] not in "。！？":
@@ -300,6 +292,49 @@ def suggest_hooks(intent: str, session, persona, names: List[str] = None) -> Lis
         return []
     from rag.bobohui import HOOK_TOPIC, hall_hook
     return [hall_hook(HOOK_TOPIC.get(intent, "这些"))]
+
+
+def spoken_topic(intent: str, persona=None) -> str:
+    """句尾问的是谁的事。莫奈问作品，妇好问经历，鸠摩罗什问经历，不把别人说成作品。"""
+    from rag.bobohui import HOOK_TOPIC
+    topic = HOOK_TOPIC.get(intent or "knowledge", "这些")
+    pid = persona if isinstance(persona, str) else (getattr(persona, "id", "") or "")
+    if topic != "我的作品":
+        return topic
+    if pid == "fuhao":
+        return "我的器物" if intent == "exhibit" else "我的经历"
+    if pid == "kumarajiva":
+        return "我的译经" if intent == "exhibit" else "我的经历"
+    return topic
+
+
+def spoken_followup(intent: str, text: str = "", persona=None) -> str:
+    """口播收尾的那一句问话。同一段正文用同一句，不同正文换着问。预约和指令不加。"""
+    if intent in ("command", "ticket_service"):
+        return ""
+    from rag.bobohui import pick_spoken_closing
+    return pick_spoken_closing(spoken_topic(intent, persona), text or intent or "knowledge")
+
+
+def append_spoken_followup(text: str, intent: str, persona=None) -> str:
+    """讲完再问一句，请游客继续问。正文已经在发问，或已经问过，就不再加。"""
+    raw = (text or "").strip()
+    if not raw or raw.startswith("这个我还不太清楚") or raw.startswith("抱歉"):
+        return raw
+    if raw.endswith("？") or raw.endswith("?"):
+        return raw
+    if intent in ("command", "ticket_service"):
+        return raw
+    from rag.bobohui import spoken_closings
+    pool = spoken_closings(spoken_topic(intent, persona))
+    if any(line and line in raw for line in pool):
+        return raw
+    hook = spoken_followup(intent, raw, persona)
+    if not hook:
+        return raw
+    if raw[-1] not in "。！？":
+        raw += "。"
+    return raw + hook
 
 
 def visit_fact_reply(question: str, persona) -> str:
@@ -415,8 +450,12 @@ _GUIDE = re.compile(
     r"开始导览|帮我导览|给我导览"
 )
 _EXHIBIT_ASK = re.compile(
-    r"展品|这幅画|那幅画|这个画|这件作品|那件作品|"
+    r"展品|这幅画|那幅画|这个画|这件作品|那件作品|这个作品|这幅作品|那个作品|"
     r"这件文物|那件文物|这件器物|名画|画作|这个展品|那个展品"
+)
+_WORK_ASK = re.compile(
+    r"你的作品|哪些作品|什么作品|有什么作品|有哪些作品|"
+    r"介绍(?:一下|下)?(?:你的)?作品|作品有哪些|讲讲作品|说说作品"
 )
 _BTN_PUNCT = re.compile(r"[\s，。！？、；：,.!?;:\"“”‘’'（）()【】\[\]《》·・]+")
 # 前端按钮直接把这三句当 type=tts 的 text 发来，不再交给大模型改写。
@@ -471,8 +510,12 @@ def _catalog_for(persona, titles: Optional[Iterable[str]], aliases: Optional[Dic
 
 
 def first_exhibit_name(text: str, titles: Iterable[str] = (),
-                       aliases: Dict[str, str] = None) -> str:
-    """文本里位置最靠前的展品。重叠时留更长的名字。书名号对不上目录时仍收原文。"""
+                       aliases: Dict[str, str] = None, *,
+                       catalog_only: bool = False) -> str:
+    """文本里位置最靠前的展品。重叠时留更长的名字。
+
+    catalog_only 时只收目录或别名里的作品。否则书名号对不上目录时仍收原文。
+    """
     raw = text or ""
     if not raw:
         return ""
@@ -487,7 +530,7 @@ def first_exhibit_name(text: str, titles: Iterable[str] = (),
     for matched in _BOOK.finditer(raw):
         inner = (matched.group(1) or "").strip()
         canon = _canon_from_pairs(inner, pairs)
-        if not canon and len(_NORM.sub("", inner)) >= 2:
+        if not canon and not catalog_only and len(_NORM.sub("", inner)) >= 2:
             canon = inner
         add(matched.start(), matched.end(), canon)
 
@@ -557,24 +600,43 @@ def screen_intention_kind(question: str, persona=None, classified_intent: str = 
         return "exhibit"
     if _GUIDE.search(text) or is_visit_query(text):
         return "guide"
-    if _EXHIBIT_ASK.search(text):
+    if _EXHIBIT_ASK.search(text) or _WORK_ASK.search(text):
         return "exhibit"
     return _map_screen_intent(classified_intent) or "talk"
+
+
+def _is_refuse_reply(reply: str, persona=None) -> bool:
+    text = (reply or "").strip()
+    if not text:
+        return False
+    if text.startswith("这个我还不太清楚"):
+        return True
+    own = (getattr(persona, "refuse_text", "") or "").strip() if persona is not None else ""
+    return bool(own and text == own)
 
 
 def intention_event(question: str, reply: str = "", persona=None,
                     classified_intent: str = "", titles: Iterable[str] = None,
                     aliases: Dict[str, str] = None) -> dict:
-    """tts_start 前发给前端。展品只带最早出现的一件，其他类型 targetName 为空。"""
+    """tts_start 前发给前端。
+
+    问到展品时，targetName 用问题里最早的一件，没有再用口播里对上目录的最早一件。
+    导览和闲聊只要口播说到作品，同样把最早一件带到 targetName。
+    预约和拒答不挂作品名。
+    """
     catalog, alias_map = _catalog_for(persona, titles, aliases)
     kind = screen_intention_kind(
         question, persona, classified_intent, catalog, alias_map)
+    spoken = reply or ""
     target = ""
-    if kind == "exhibit":
-        target = (
-            first_exhibit_name(question or "", catalog, alias_map)
-            or first_exhibit_name(reply or "", catalog, alias_map)
-        )
+    if not _is_refuse_reply(spoken, persona) and kind != "reserve":
+        if kind == "exhibit":
+            target = (
+                first_exhibit_name(question or "", catalog, alias_map)
+                or first_exhibit_name(spoken, catalog, alias_map, catalog_only=True)
+            )
+        else:
+            target = first_exhibit_name(spoken, catalog, alias_map, catalog_only=True)
     return {
         "type": "intention",
         "message": {

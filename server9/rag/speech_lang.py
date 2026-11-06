@@ -222,8 +222,6 @@ def polish_spoken(text: str, code: str = "zh") -> str:
         spoken = _convert_cn_numbers(spoken)
         spoken = _ordinals(spoken, code)
     spoken = _normalize_expo(spoken, code)
-    if code == "zh" and "宽创" in spoken and "博博会" not in spoken:
-        spoken = "我就在博博会现场的宽创展厅里。" + spoken
     spoken = re.sub(r"[ \t]*\n+[ \t]*", " ", spoken)
     spoken = re.sub(r"[ \t]{2,}", " ", spoken)
     spoken = re.sub(r"\s+([。！？，、,.!?])", r"\1", spoken)

@@ -923,7 +923,8 @@ def _embedding_only_gen(text: str, persona_id: str = ""):
         print(f"⚠️ 人设 {pid} 无 flow prompt，embedding-only 容易句间换音色")
     frontend = cosyvoice_model.frontend
     model = cosyvoice_model.model
-    spoken = to_spoken_zh(text)
+    from tts.pronounce import pronounce_for_tts
+    spoken = pronounce_for_tts(to_spoken_zh(text))
     # 短句跳过 wetext，首包更快
     if len(spoken) <= 48:
         normalized = spoken
@@ -1007,7 +1008,8 @@ def _start_cosy_gen(text: str, persona_id: str = ""):
     """人设 embedding + clip 的 flow prompt。参考句只进 CosyVoice3 的 prompt_text。"""
     global _tts_infer_mode
     from tts.speaktext import to_spoken_zh
-    text = to_spoken_zh(text)
+    from tts.pronounce import pronounce_for_tts
+    text = pronounce_for_tts(to_spoken_zh(text))
     pid = persona_id or _voice_persona_id
     if not pid or (persona_id and _voice_persona_id and persona_id != _voice_persona_id):
         raise RuntimeError(
