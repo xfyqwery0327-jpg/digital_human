@@ -11,8 +11,8 @@ from tts.pronounce import pronounce_for_tts  # noqa: E402
 
 def test_qiuci_and_other_polyphones_become_homophones():
     spoken = pronounce_for_tts("我出生在龟兹，师父是鸠摩罗什，母亲耆婆来自罽宾。")
-    assert "龟兹" not in spoken
-    assert "丘慈" in spoken
+    assert "丘慈" not in spoken
+    assert "龟兹(qiu1 ci2)" in spoken
     assert "鸠摩罗石" in spoken
     assert "奇婆" in spoken
     assert "记宾" in spoken
