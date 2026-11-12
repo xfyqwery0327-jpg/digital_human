@@ -86,7 +86,7 @@ def _robot_knowledge_turn_locked(question: str, session: SessionState, top_k: in
         if not fact:
             log.info("家庭问题资料里没有原句 query=%s", question[:80])
             return refuse_payload("family", persona)
-        log.info("家庭问题用资料原句 query=%s", question[:80])
+        log.info("家庭问题用资料原句 query=%s text=%s", question[:80], fact[:160])
         return {"text": fact, "sources": [], "refused": False}
 
     hits = search(question, top_k, cat, session, persona=persona)

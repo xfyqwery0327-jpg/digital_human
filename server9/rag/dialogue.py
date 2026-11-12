@@ -51,7 +51,7 @@ class RealtimeMemory:
 
 _NOISE = re.compile(r"^[0-9零一二三四五六七八九十两〇○]+[啊呀呢吧吗]?$")
 _RELATION = re.compile(r"什么关系|怎么认识|如何认识|怎样认识|咋认识")
-_SPOUSE = re.compile(r"老婆|妻子|夫人|爱人")
+_SPOUSE = re.compile(r"老婆|妻子|夫人|爱人|结婚|婚姻|结过婚|结了婚|几次婚")
 _CHILD = re.compile(r"孩子|儿子|女儿")
 _SKIP_FAMILY = re.compile(
     r"？|吗|何时|有几个|是谁|是什么|请介绍|如何|请说明|请根据|值得关注|"
@@ -104,7 +104,7 @@ def is_relation_question(question: str) -> bool:
 
 
 def is_family_question(question: str) -> bool:
-    """问孩子或配偶。点了书名号的仍交给展品检索。"""
+    """问孩子、配偶或结过几次婚。点了书名号的仍交给展品检索。"""
     text = question or ""
     if _BOOK.search(text):
         return False

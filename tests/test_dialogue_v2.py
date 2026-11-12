@@ -30,6 +30,9 @@ def test_noise_relation_and_family_do_not_invent():
     assert not is_relation_question("你和《睡莲》是什么关系")
     assert is_family_question("你有几个孩子")
     assert is_family_question("你有几个老婆")
+    assert is_family_question("你结婚了吗")
+    assert is_family_question("你结过几次婚")
+    assert is_family_question("莫奈结婚")
     assert not is_family_question("《卡美尔》画的是谁")
     hits = [{
         "text": (
@@ -47,6 +50,11 @@ def test_noise_relation_and_family_do_not_invent():
     assert "迈克尔" not in child and "病情" not in child and "？" not in child
     assert "卡美尔" in wife and "爱丽丝" in wife and "结了婚" in wife
     assert "莫奈我" not in wife and "癌" not in wife and "死于" not in wife
+    married = family_reply("你结过几次婚", hits)
+    assert married == wife
+    long_bio = ("父亲" * 180) + "1870年，莫奈与卡米尔结婚。后来莫奈和爱丽丝在1892年结婚。"
+    twice = family_reply("莫奈结婚", [{"text": long_bio}])
+    assert "卡美尔" in twice and "爱丽丝" in twice and "癌" not in twice
     assert family_reply("你有几个孩子", [{"text": "今天展出睡莲。"}]) == ""
 
 
