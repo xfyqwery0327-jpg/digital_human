@@ -33,6 +33,7 @@ from rag.visit import visit_hint, guard_hall_clock, filter_spoken_sentence
 from rag.dialogue import (
     is_foreign_question, FOREIGN_REPLY, note_hall,
     rule_intent, is_noise_question, is_relation_question, is_family_question, family_reply,
+    is_life_question, life_reply, relation_reply,
     suggest_hooks, visit_fact_reply, exhibit_names, titles_from_items, HALL_INTENTS,
     RealtimeMemory, intention_event, button_screen_intent,
 )
@@ -803,6 +804,9 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
         elif is_other_exhibition_query(user_question):
             print(f"🚫 其他展会问题，拉回本届: {user_question[:40]}")
             await deliver(refuse_text(), "knowledge", refused=True)
+        elif is_relation_question(user_question) and relation_reply(user_question):
+            print(f"🤝 认人问题用固定句: {user_question[:40]}")
+            await deliver(relation_reply(user_question), "knowledge")
         elif is_noise_question(user_question) or is_relation_question(user_question):
             print(f"🚫 闲句或认人问题，不叫大模型: {user_question[:40]}")
             await deliver(refuse_text(), "knowledge", refused=True)
@@ -815,6 +819,10 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
             llm_answer = fact or refuse_text()
             print(f"👨‍👩‍👧 家庭问题用资料原句: {user_question[:40]} hit={bool(fact)}")
             await deliver(llm_answer, "knowledge", refused=not fact)
+        elif is_life_question(user_question) and (fact := await loop.run_in_executor(
+                None, lambda: life_reply(user_question, persona=active()))):
+            print(f"📜 生平问题用资料原句: {user_question[:40]}")
+            await deliver(fact, "knowledge")
         elif _looks_chitchat(user_question):
             await deliver(chitchat_reply(user_question, persona), "chitchat")
         elif _command_reply(user_question, dialogue_state):

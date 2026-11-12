@@ -12,7 +12,8 @@ from rag.dialogue import (
     FOREIGN_REPLY, RealtimeMemory, exhibit_names, is_foreign_question,
     note_hall, note_realtime, pack_done, realtime_reply, rule_intent,
     append_spoken_followup, spoken_followup, suggest_hooks, titles_from_items, visit_fact_reply,
-    is_noise_question, is_relation_question, is_family_question, family_reply,
+    is_noise_question, is_relation_question,     is_family_question, family_reply,
+    is_life_question, life_reply, relation_reply,
 )
 from rag.scope import is_other_exhibition_query, refuse_text
 from config import PERSONAS_DIR
@@ -46,8 +47,18 @@ def test_noise_relation_and_family_do_not_invent():
     }]
     child = family_reply("你有几个孩子", hits)
     wife = family_reply("你有几个老婆", hits)
-    assert "简" in child and "米契尔" in child
+    assert "让" in child and "简" not in child and "米契尔" in child
     assert "迈克尔" not in child and "病情" not in child and "？" not in child
+    assert "没有女儿" not in child
+    household_hits = hits + [{
+        "text": "1881年12月，莫奈与爱丽丝及他们共同抚养的8个孩子搬离维特伊。",
+    }]
+    girl = family_reply("你有女儿吗", household_hits)
+    assert girl.startswith("我没有女儿。")
+    assert "让" in girl and "米契尔" in girl and "八个" in girl
+    assert "8个" not in girl
+    raised = family_reply("你有几个孩子", household_hits)
+    assert "没有女儿" not in raised and "八个" in raised
     assert "卡美尔" in wife and "爱丽丝" in wife and "结了婚" in wife
     assert "莫奈我" not in wife and "癌" not in wife and "死于" not in wife
     married = family_reply("你结过几次婚", hits)
@@ -56,6 +67,91 @@ def test_noise_relation_and_family_do_not_invent():
     twice = family_reply("莫奈结婚", [{"text": long_bio}])
     assert "卡美尔" in twice and "爱丽丝" in twice and "癌" not in twice
     assert family_reply("你有几个孩子", [{"text": "今天展出睡莲。"}]) == ""
+
+
+def test_childhood_and_life_stay_on_monet():
+    assert is_life_question("你小时候在哪里长大")
+    assert is_life_question("讲讲你的生平")
+    assert is_life_question("你这一生有哪些经历")
+    assert not is_life_question("《日出·印象》的创作经历")
+    hits = [{
+        "text": (
+            "1840年11月14日出生于巴黎拉菲特街。"
+            "1845年，全家移居勒阿弗尔，莫奈在这里的度过了童年。"
+            "1867年7月，卡美尔生下他们的长子——简。"
+            "1870年6月28日，与卡美尔结婚。"
+            "1892年，同年莫奈与爱丽丝结婚。"
+            "1878年3月17日，他们有了另一个儿子，迈克尔（Michael）。"
+            "晚年我定居吉维尼。"
+            "皮埃尔·杜蒙的生平。巴布罗·毕加索有哪些重要经历。"
+        ),
+    }]
+    grown = life_reply("你小时候在哪里长大", hits)
+    assert "勒阿弗尔" in grown and "巴黎长大" not in grown
+    assert "卡美尔" not in grown and "杜蒙" not in grown
+    life = life_reply("讲讲你的生平", hits)
+    assert "勒阿弗尔" in life and "卡美尔" in life and "爱丽丝" in life
+    assert "让" in life and "简" not in life and "米契尔" in life
+    assert "吉维尼" in life
+    assert "杜蒙" not in life and "毕加索" not in life
+
+
+def test_birth_death_parents_and_specific_wives():
+    assert not is_relation_question("你和卡米尔是什么关系")
+    assert is_relation_question("你和马奈是什么关系")
+    assert is_family_question("卡米尔是谁")
+    assert is_family_question("你太太是谁")
+    assert is_family_question("你父亲是谁")
+    assert not is_family_question("《卡美尔》画的是谁")
+    assert is_life_question("你是在哪长大的")
+    assert is_life_question("你出生在哪里")
+    assert is_life_question("你什么时候去世的")
+    assert is_life_question("介绍一下你的人生")
+    hits = [{
+        "text": (
+            "克劳德·莫奈（Oscar-Claude Monet，1840年11月14日－1926年12月5日），全名奥斯卡-克劳德·莫奈，出生于巴黎。"
+            "1845年，全家移居勒阿弗尔，莫奈在这里的度过了童年。"
+            "1867年7月，卡美尔生下他们的长子——简。"
+            "1870年6月28日，与卡美尔结婚。"
+            "1892年，同年莫奈与爱丽丝结婚。"
+            "1878年3月17日，他们有了另一个儿子，迈克尔（Michael）。"
+            "1881年12月，莫奈与爱丽丝及他们共同抚养的8个孩子搬离维特伊。"
+            "父亲库路多·阿多洛夫·莫奈是一位商人，在阿弗尔与他的姐夫合伙经营着一家仪器店。莫奈5岁时来到父亲的身边。"
+            "1861年，应召赴阿尔及利亚服兵役。1862年，因病退役。"
+            "普法战争爆发，莫奈只身到伦敦。"
+            "1926年，莫奈已几乎完全失明。"
+            "1926年，莫奈12月6日病逝于吉维尼家中，享年86岁。"
+            "晚年我定居吉维尼。"
+            "莱热《母亲》的生平资料有哪些？"
+        ),
+    }]
+    born = life_reply("你出生在哪里", hits)
+    assert "十一月十四日" in born and "巴黎" in born and "勒阿弗尔" not in born
+    grown = life_reply("你是在哪长大的", hits)
+    assert "勒阿弗尔" in grown and "巴黎长大" not in grown
+    died = life_reply("你什么时候去世的", hits)
+    assert "十二月五日" in died and "六日" not in died
+    assert "吉维尼" in died and "八十六" in died
+    assert family_reply("你和卡米尔是什么关系", hits) == "卡美尔是我的妻子。"
+    assert family_reply("卡米尔是谁", hits) == "卡美尔是我的妻子。"
+    assert "爱丽丝是我的妻子" in family_reply("爱丽丝是谁", hits)
+    wives = family_reply("你太太是谁", hits)
+    assert "卡美尔" in wives and "爱丽丝" in wives
+    father = family_reply("你父亲是谁", hits)
+    assert "商人" in father and "勒阿弗尔" in father and "五岁" in father
+    assert "库路多" not in father
+    assert "没有写我母亲" in family_reply("你母亲是谁", hits)
+    assert "阿尔及利亚" in life_reply("你当过兵吗", hits)
+    assert "一八六一年" in life_reply("你当过兵吗", hits)
+    assert "伦敦" in life_reply("你去过英国吗", hits)
+    assert "失明" in life_reply("你眼睛后来怎么了", hits)
+    assert relation_reply("你和马奈是什么关系") == "我和马奈不是兄弟，是朋友。他比我大，画得比我实。"
+    assert relation_reply("你和卡米尔是什么关系") == ""
+    own = family_reply("八个孩子都是你亲生的吗", hits)
+    assert own.startswith("亲生的是长子让和米契尔。")
+    assert "八个" in own
+    life = life_reply("介绍一下你的人生", hits)
+    assert "勒阿弗尔" in life and "十二月五日" in life and "让" in life and "吉维尼" in life
 
 
 def test_weather_second_turn_has_no_digits():

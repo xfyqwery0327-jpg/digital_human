@@ -51,8 +51,10 @@ class RealtimeMemory:
 
 _NOISE = re.compile(r"^[0-9零一二三四五六七八九十两〇○]+[啊呀呢吧吗]?$")
 _RELATION = re.compile(r"什么关系|怎么认识|如何认识|怎样认识|咋认识")
-_SPOUSE = re.compile(r"老婆|妻子|夫人|爱人|结婚|婚姻|结过婚|结了婚|几次婚")
+_SPOUSE = re.compile(r"老婆|妻子|夫人|爱人|太太|结婚|婚姻|结过婚|结了婚|几次婚")
 _CHILD = re.compile(r"孩子|儿子|女儿")
+_WIFE_WHO = re.compile(r"卡米尔|卡美尔|卡米耶|爱丽丝")
+_PARENT = re.compile(r"父亲|爸爸|母亲|妈妈|父母")
 _SKIP_FAMILY = re.compile(
     r"？|吗|何时|有几个|是谁|是什么|请介绍|如何|请说明|请根据|值得关注|"
     r"《|欧希德|凡尔纳|费加罗|谢鲁班|垂钓|去世|死于|病情|卧床|癌"
@@ -62,8 +64,19 @@ _NAME_ALIAS = {
     "卡米耶": "卡美尔",
     "迈克尔": "米契尔",
     "米歇尔": "米契尔",
-    "让": "简",
+    "简": "让",
 }
+_CHILDHOOD_Q = re.compile(r"小时候|童年|长大|故乡|年轻的时候")
+_LIFE_Q = re.compile(
+    r"生平|这一生|哪些经历|你的经历|什么经历|你的人生|你的故事|自己的故事|"
+    r"讲讲你自己|介绍一下你自己|介绍下你自己|成长"
+)
+_BIRTH_Q = re.compile(r"出生|生于|生日|哪年出生|哪天生")
+_DEATH_Q = re.compile(r"去世|逝世|死了|死的|多少岁|享年|哪年死")
+_HOME_Q = re.compile(r"后来住|住在哪|住哪儿|定居")
+_ARMY_Q = re.compile(r"当过兵|服兵役|当兵|参军")
+_LONDON_Q = re.compile(r"英国|伦敦")
+_EYE_Q = re.compile(r"眼睛|失明|视力")
 
 
 def rule_intent(question: str, session=None):
@@ -100,7 +113,17 @@ def is_relation_question(question: str) -> bool:
     text = question or ""
     if _BOOK.search(text):
         return False
+    if _WIFE_WHO.search(text):
+        return False
     return bool(_RELATION.search(text))
+
+
+def relation_reply(question: str) -> str:
+    """和马奈只说明不是兄弟。其余认人问题仍拒答。"""
+    text = question or ""
+    if _BOOK.search(text) or "马奈" not in text or not _RELATION.search(text):
+        return ""
+    return "我和马奈不是兄弟，是朋友。他比我大，画得比我实。"
 
 
 def is_family_question(question: str) -> bool:
@@ -108,7 +131,23 @@ def is_family_question(question: str) -> bool:
     text = question or ""
     if _BOOK.search(text):
         return False
+    if _PARENT.search(text):
+        return True
+    if _WIFE_WHO.search(text) and re.search(r"是谁|什么人|什么关系", text):
+        return True
     return bool(_SPOUSE.search(text) or _CHILD.search(text))
+
+
+def is_life_question(question: str) -> bool:
+    """问童年在哪长大，或泛问生平、经历。点了作品名的仍交给展品检索。"""
+    text = question or ""
+    if _BOOK.search(text):
+        return False
+    return bool(
+        _CHILDHOOD_Q.search(text) or _LIFE_Q.search(text)
+        or _BIRTH_Q.search(text) or _DEATH_Q.search(text) or _HOME_Q.search(text)
+        or _ARMY_Q.search(text) or _LONDON_Q.search(text) or _EYE_Q.search(text)
+    )
 
 
 def _family_name(raw: str) -> str:
@@ -145,21 +184,33 @@ def family_reply(question: str, hits=None, persona=None) -> str:
     parts = _family_sentences(blob)
     ask = question or ""
     lines = []
-    if _SPOUSE.search(ask):
-        names = []
-        for sent in parts:
-            if "结婚" not in sent:
-                continue
-            for matched in re.finditer(r"(?:与|和)([\u4e00-\u9fff]{2,4})(?:在[\u4e00-\u9fff0-9]{0,12})?结婚", sent):
-                name = _family_name(matched.group(1))
-                if name in {"莫奈", "妻子", "夫人"} or name in names:
+    parent = _parent_lines(ask, blob)
+    if parent:
+        lines.extend(parent)
+    wife_focus = _WIFE_WHO.search(ask) and re.search(r"是谁|什么人|什么关系", ask)
+    if _SPOUSE.search(ask) or wife_focus:
+        named = []
+        if re.search(r"卡米尔|卡美尔|卡米耶", ask):
+            named.append("卡美尔")
+        if "爱丽丝" in ask:
+            named.append("爱丽丝")
+        if len(named) == 1:
+            lines.append("%s是我的妻子。" % named[0])
+        else:
+            names = []
+            for sent in parts:
+                if "结婚" not in sent:
                     continue
-                names.append(name)
-        if len(names) == 1:
-            lines.append("我和%s结了婚。" % names[0])
-        elif names:
-            rest = "、".join(names[1:])
-            lines.append("我和%s结了婚，后来又和%s结了婚。" % (names[0], rest))
+                for matched in re.finditer(r"(?:与|和)([\u4e00-\u9fff]{2,4})(?:在[\u4e00-\u9fff0-9]{0,12})?结婚", sent):
+                    name = _family_name(matched.group(1))
+                    if name in {"莫奈", "妻子", "夫人"} or name in names:
+                        continue
+                    names.append(name)
+            if len(names) == 1:
+                lines.append("我和%s结了婚。" % names[0])
+            elif names:
+                rest = "、".join(names[1:])
+                lines.append("我和%s结了婚，后来又和%s结了婚。" % (names[0], rest))
     if _CHILD.search(ask):
         eldest = []
         later = []
@@ -182,14 +233,138 @@ def family_reply(question: str, hits=None, persona=None) -> str:
                 for matched in re.finditer(pattern, sent):
                     remember(later, _family_name(matched.group(1)))
         later = [name for name in later if name not in eldest]
+        son_line = ""
         if eldest and later:
-            lines.append("我们的长子是%s，后来又有了儿子%s。" % (eldest[0], "、".join(later)))
+            son_line = "我们的长子是%s，后来又有了儿子%s。" % (eldest[0], "、".join(later))
         elif eldest:
-            lines.append("我们的长子是%s。" % "、".join(eldest))
+            son_line = "我们的长子是%s。" % "、".join(eldest)
         elif len(later) == 1:
-            lines.append("资料里写到儿子%s。" % later[0])
+            son_line = "资料里写到儿子%s。" % later[0]
         elif later:
-            lines.append("资料里写到儿子%s。" % "、".join(later))
+            son_line = "资料里写到儿子%s。" % "、".join(later)
+        daughter_only = "女儿" in ask and not re.search(r"儿子|孩子", ask)
+        if daughter_only:
+            lines.append("我没有女儿。")
+        if "亲生" in ask and (eldest or later):
+            own = []
+            if eldest:
+                own.append("长子" + eldest[0])
+            own.extend(later)
+            lines.append("亲生的是%s。" % "和".join(own))
+        elif son_line:
+            lines.append(son_line)
+        household = _household_line(blob)
+        if household:
+            lines.append(household)
+    if not lines:
+        return ""
+    from tts.speaktext import to_spoken_zh
+    return to_spoken_zh("".join(lines))
+
+
+def _parent_lines(ask: str, blob: str):
+    """父亲只说资料里的职业和勒阿弗尔。母亲没有名字就不编。"""
+    lines = []
+    raw = blob or ""
+    if re.search(r"父亲|爸爸|父母", ask) and "父亲" in raw and "商人" in raw and "仪器店" in raw:
+        lines.append("我父亲是商人，在勒阿弗尔和姐夫合伙经营仪器店。")
+        if "5岁时来到父亲" in raw or "五岁时来到父亲" in raw:
+            lines.append("我五岁到了父亲身边。")
+    if re.search(r"母亲|妈妈", ask) or ("父母" in ask):
+        if not re.search(r"母亲(?:名叫|叫做)([\u4e00-\u9fff]{2,4})", raw):
+            lines.append("资料里没有写我母亲的名字。")
+    return lines
+
+
+def _birth_line(blob: str) -> str:
+    raw = blob or ""
+    if "1840年11月14日" in raw and "巴黎" in raw:
+        return "我1840年11月14日出生在巴黎。"
+    if "出生于巴黎" in raw or "生于巴黎" in raw:
+        return "我出生在巴黎。"
+    return ""
+
+
+def _death_line(blob: str) -> str:
+    """逝世日以全名条的12月5日为准。年表里的6日不念。"""
+    raw = blob or ""
+    fifth = "1926年12月5日" in raw or "一九二六年十二月五日" in raw
+    sixth = "12月6日" in raw and "病逝" in raw
+    if not fifth and not sixth:
+        return ""
+    day = "1926年12月5日" if fifth else "1926年12月6日"
+    where = "在吉维尼" if "病逝于吉维尼" in raw else ""
+    age = "，享年86岁" if "享年86岁" in raw else ""
+    return "我%s%s去世%s。" % (day, where, age)
+
+
+def _household_line(blob: str) -> str:
+    """资料写了和爱丽丝共同抚养的孩子人数时才说。"""
+    matched = re.search(r"共同抚养的(\d+)个孩子", blob or "")
+    if not matched:
+        return ""
+    return "和爱丽丝一起抚养的孩子一共%s个。" % matched.group(1)
+
+
+def _grew_up_line(blob: str) -> str:
+    """出生在巴黎，童年在勒阿弗尔。不要把出生地说成长大的地方。"""
+    raw = blob or ""
+    born = "出生于巴黎" in raw and ("1840" in raw or "拉菲特" in raw)
+    grew = False
+    for part in re.split(r"[\n。！？]", raw):
+        if "勒阿弗尔" in part and "童年" in part:
+            grew = True
+            break
+    if born and grew:
+        return "我1840年出生在巴黎，童年是在勒阿弗尔过的。"
+    if grew:
+        return "我的童年是在勒阿弗尔过的。"
+    if born:
+        return "我出生在巴黎。"
+    return ""
+
+
+def life_reply(question: str, hits=None, persona=None) -> str:
+    """出生、逝世、童年和泛问生平直接用资料原句，不交给检索。"""
+    if hits is None:
+        hits = _persona_blobs(persona)
+    blob = "\n".join((h.get("text") or "") for h in hits or [])
+    ask = question or ""
+    childhood = bool(_CHILDHOOD_Q.search(ask))
+    overview = bool(_LIFE_Q.search(ask))
+    birth = bool(_BIRTH_Q.search(ask))
+    death = bool(_DEATH_Q.search(ask))
+    home = bool(_HOME_Q.search(ask))
+    lines = []
+    if overview or childhood:
+        grew = _grew_up_line(blob)
+        if grew:
+            lines.append(grew)
+    elif birth:
+        born = _birth_line(blob)
+        if born:
+            lines.append(born)
+    if death or overview:
+        died = _death_line(blob)
+        if died:
+            lines.append(died)
+    if home and not overview and "定居" in blob and "吉维尼" in blob:
+        lines.append("晚年我定居吉维尼。")
+    if _ARMY_Q.search(ask) and not overview and "服兵役" in blob and "阿尔及利亚" in blob:
+        lines.append("1861年我应召到阿尔及利亚服兵役，1862年因病退役。")
+    if _LONDON_Q.search(ask) and not overview and "到伦敦" in blob:
+        lines.append("普法战争时我到过伦敦。")
+    if _EYE_Q.search(ask) and not overview and "完全失明" in blob:
+        lines.append("晚年我几乎完全失明。")
+    if overview:
+        wife = family_reply("你结过几次婚", hits)
+        child = family_reply("你有几个孩子", hits)
+        if wife:
+            lines.append(wife)
+        if child:
+            lines.append(child)
+        if "定居" in blob and "吉维尼" in blob:
+            lines.append("晚年我定居吉维尼。")
     if not lines:
         return ""
     from tts.speaktext import to_spoken_zh
