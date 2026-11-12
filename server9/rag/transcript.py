@@ -20,6 +20,18 @@ _CLOSING = re.compile(r"讲到这儿|拜拜|阿弥陀佛|善哉善哉")
 
 # 问句对上实录才照搬。短问候、天气这类不够像某一问。
 HIT_SCORE = 0.72
+# 妇好展台四条原稿的换种说法。模糊分不够时才用，避免压过更像的旧问句。
+_LOOSE_BOOTH = (
+    (re.compile(r"(?:你|您|妇好).{0,6}占卜"), "听说您会占卜"),
+    (re.compile(r"(?:你|您).{0,8}(?:酿酒|制酒)|酿酒吗|制酒吗"), "听说您还会制酒"),
+    (re.compile(r"战役.{0,10}(?:印象|深刻)|(?:印象最深|最深刻).{0,8}战役"), "印象最深刻"),
+    (re.compile(
+        r"(?:详细|仔细|具体).{0,4}(?:讲讲|讲一讲|说说|介绍).{0,8}鸮尊"
+        r"|妇好鸮尊是什么"
+        r"|介绍(?:一下|下)?.{0,4}妇好鸮尊"
+        r"|讲讲(?:这件)?(?:妇好)?鸮尊"
+    ), "详细讲讲这件妇好鸮尊"),
+)
 
 
 def kb_transcript_path(persona_id: str) -> Path:
@@ -50,6 +62,26 @@ def question_score(query: str, recorded: str) -> float:
     return ratio
 
 
+def _loose_booth_answer(query: str, rows) -> str:
+    """换种说法仍念妇好那四条原稿。问句太短、模糊分不够时才走到这里。"""
+    q = normalize_question(query)
+    if len(q) < 4:
+        return ""
+    needle = ""
+    for pattern, anchor in _LOOSE_BOOTH:
+        if pattern.search(q):
+            needle = anchor
+            break
+    if not needle:
+        return ""
+    for row in rows or []:
+        recorded = normalize_question(row.get("question") or "")
+        answer = (row.get("answer") or "").strip()
+        if answer and needle in recorded:
+            return answer
+    return ""
+
+
 def match_transcript(query: str, rows) -> str:
     best = ""
     best_score = 0.0
@@ -62,9 +94,9 @@ def match_transcript(query: str, rows) -> str:
         if score > best_score:
             best_score = score
             best = answer
-    if best_score < HIT_SCORE:
-        return ""
-    return best
+    if best_score >= HIT_SCORE:
+        return best
+    return _loose_booth_answer(query, rows)
 
 
 _cache = {}

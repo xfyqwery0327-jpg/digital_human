@@ -69,7 +69,7 @@ function Get-SavedLlm {
             if ($tag) { return $tag }
         }
     }
-    return "8"
+    return "4"
 }
 
 function Get-SavedCv {
@@ -260,9 +260,29 @@ function Stop-Llm {
 function Stop-Narrator {
     Stop-Task "DigitalHuman"
     Stop-ByCommand "*start-server.ps1*"
-    Stop-ByCommand "*uvicorn app:app*"
+    Stop-ByCommand "*uvicorn app:app --host 0.0.0.0 --port 8848*"
     Stop-Port 8848
     Wait-Until { @($(Get-ListenPids 8848)).Count -eq 0 } 10 | Out-Null
+}
+
+function Stop-Tts {
+    Stop-Task "QwenTtsService"
+    Stop-ByCommand "*qwen-tts-service\deploy\start-service.ps1*"
+    Stop-ByCommand "*--port 8812*"
+    Stop-Port 8812
+    Wait-Until { @($(Get-ListenPids 8812)).Count -eq 0 } 15 | Out-Null
+}
+
+function Start-TtsNow {
+    if (@($(Get-ListenPids 8812)).Count -gt 0) {
+        Write-Host "8812 qwen-tts-service 已在听"
+        return
+    }
+    $script = "C:\qwen-tts-service\deploy\start-service.ps1"
+    if (-not (Test-Path $script)) {
+        throw ("找不到口播启动脚本: " + $script)
+    }
+    Start-ScriptTask "QwenTtsService" $script
 }
 
 function Start-ScriptTask([string]$taskName, [string]$scriptPath) {
@@ -385,7 +405,7 @@ function Show-Status {
             Write-Host "还没用 switch.bat 启动过。开机先按上面这份默认配置。"
         }
     } else {
-        Write-Host "还没有 switch.bat 启动记录，开机按 8B，语音走 qwen-tts-service"
+        Write-Host "还没有 switch.bat 启动记录，开机按 4B，语音走 qwen-tts-service"
     }
     Write-Host "讲解模型文件:"
     foreach ($tag in @("4", "8")) {
@@ -420,7 +440,7 @@ function Show-Status {
     } else {
         Write-Host ("8812 qwen-tts-service：在听  PID " + ($pids8812 -join ","))
     }
-    foreach ($name in @("DigitalHumanLLM", "DigitalHuman")) {
+    foreach ($name in @("QwenTtsService", "DigitalHumanLLM", "DigitalHuman")) {
         try {
             $task = Get-ScheduledTask -TaskName $name -ErrorAction Stop
             Write-Host ("计划任务 " + $name + "：" + $task.State)
@@ -450,12 +470,13 @@ try {
     if ($Action -eq "off") {
         Stop-Narrator
         Stop-Llm
-        if (@($(Get-ListenPids 8080)).Count -gt 0 -or @($(Get-ListenPids 8848)).Count -gt 0) {
+        Stop-Tts
+        if (@($(Get-ListenPids 8080)).Count -gt 0 -or @($(Get-ListenPids 8848)).Count -gt 0 -or @($(Get-ListenPids 8812)).Count -gt 0) {
             Write-Host "还有端口没停干净。"
             Show-Status
             exit 1
         }
-        Write-Host "已关闭。下次登录仍按上次启动的配置自动拉起。"
+        Write-Host "已关闭 8080、8812、8848。下次登录仍会按计划任务拉起。"
         exit 0
     }
     if ($Action -eq "llm") {
@@ -489,14 +510,15 @@ try {
         $cv = Get-SavedCv
         $tts = Get-SavedTts
         Assert-LlmFile $llm | Out-Null
-        Write-Host ("重启讲解员，语音 " + (Voice-Title $tts $cv) + "。8080 不动。")
+        Write-Host ("重启讲解员，语音 " + (Voice-Title $tts $cv) + "。8080 不动。先确认 8812。")
+        Start-TtsNow
         Stop-Narrator
         Start-NarratorNow
-        if (Wait-Ready $false "" $true 240) {
+        if (Wait-Ready $false "" $true 300) {
             Write-Host "讲解员已按当前语音配置重启。"
             exit 0
         }
-        Write-Host "讲解员没有在 240 秒内听上 8848。"
+        Write-Host "讲解员没有在 300 秒内听上 8848。8812 冷启动大约一分半，讲解员会先等它的 /health。"
         Show-LogTail (Join-Path $Root "logs\autostart.log")
         Show-LogTail (Join-Path $Root "logs\digital-human.out.log")
         exit 1
@@ -507,6 +529,7 @@ try {
         $tts = Get-SavedTts
         Assert-LlmFile $llm | Out-Null
         Save-Choice $llm $cv
+        Start-TtsNow
         $needLlm = $true
         $running = Get-LlmRunningTag
         if ($running -eq $llm) {
@@ -529,7 +552,7 @@ try {
             Write-Host "两路都已按当前配置在跑。"
             exit 0
         }
-        $wait = 150
+        $wait = 300
         if ($needLlm -and -not $needCv) { $wait = 120 }
         if (Wait-Ready $needLlm $llm $needCv $wait) {
             Write-Host "已按上次配置启动。"

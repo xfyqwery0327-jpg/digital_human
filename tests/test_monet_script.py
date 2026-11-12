@@ -92,4 +92,10 @@ def test_what_else_can_you_do_lists_five_functions():
     assert capability_reply("好的，你一生都有哪些作品啊") == ""
     assert capability_reply("听说你眼睛后来不好了？那怎么还能画画？") == ""
     assert capability_reply("你好") == ""
+    assert capability_reply("没什么功能啊") == ""
+    assert capability_reply("这个是什么功能") == ""
+    assert capability_reply("这个展品有什么功能") == ""
+    assert capability_reply("你的作品还有什么功能") == ""
+    assert capability_reply("你有哪些功能") == text
+    assert capability_reply("妇好，你还有什么功能") == text
     assert needs_long_spoken("莫奈，你还能干什么呢？") is False

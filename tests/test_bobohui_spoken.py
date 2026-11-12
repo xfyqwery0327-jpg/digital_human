@@ -8,9 +8,9 @@ sys.path.insert(0, str(ROOT / "server9"))
 
 from persona.registry import _parse_persona, _yaml_load
 from config import PERSONAS_DIR
-from rag.bobohui import HOOK_TOPIC, hall_hook, spoken_closings
+from rag.bobohui import hall_hook, spoken_closings
 from rag.scope import is_other_exhibition_query
-from rag.dialogue import RealtimeMemory, note_realtime, realtime_reply, suggest_hooks, visit_fact_reply
+from rag.dialogue import RealtimeMemory, note_realtime, realtime_reply, spoken_topic, suggest_hooks, visit_fact_reply
 
 OLD_SHOW = ("浪漫与星辰", "贵州省博物馆", "七十八元", "四十九元", "这场商代的展", "龟兹博物馆", "这场展有我的")
 INTENTS = ("exhibit", "person", "visit", "chitchat", "weather", "news")
@@ -62,6 +62,20 @@ def test_unasked_presence_is_removed():
         "介绍一下妇好鸮尊",
         "我在这里。就在博博会宽创展厅里。鸮尊是酒器。",
     ) == "鸮尊是酒器。"
+    assert strip_unasked_here(
+        "介绍一下睡莲",
+        "我此刻就在画睡莲。颜色很亮。",
+    ) == "画睡莲。颜色很亮。"
+    assert strip_unasked_here(
+        "介绍一下睡莲",
+        "人就在宽创展厅里作画。睡莲是我画的。",
+    ) == "作画。睡莲是我画的。"
+    assert strip_unasked_here(
+        "介绍一下睡莲",
+        "我就在博博会现场的宽创展厅里讲睡莲。",
+    ) == "讲睡莲。"
+    assert strip_unasked_here("你在哪", "我在这里。") == "我在这里。"
+    assert "吉维尼" in strip_unasked_here("睡莲是在哪里画的", "我就在吉维尼画的睡莲。")
 
 
 def test_three_personas_only_speak_bobohui():
@@ -89,7 +103,7 @@ def test_three_personas_only_speak_bobohui():
         assert any(lines["新闻口播"].endswith(line) for line in spoken_closings("新闻"))
         assert "http" not in lines["新闻口播"]
         for intent, hooks in lines["钩子"].items():
-            assert hooks == [hall_hook(HOOK_TOPIC[intent])], (pid, intent, hooks)
+            assert hooks == [hall_hook(spoken_topic(intent, persona))], (pid, intent, hooks)
             assert all(word not in hooks[0] for word in ("睡莲", "甲骨", "舍利盒", "开馆"))
     return samples
 

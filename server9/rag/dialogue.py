@@ -286,25 +286,28 @@ def _named_hooks(persona, names, intent: str) -> List[str]:
 
 
 def suggest_hooks(intent: str, session, persona, names: List[str] = None) -> List[str]:
-    """按钮跟着刚讲的内容走：了解完天气、新闻或我的作品。"""
-    del session, persona, names
+    """屏幕按钮和口播用同一个话题。妇好是器物或经历，鸠摩罗什是译经或经历。"""
+    del session, names
     if intent in ("command", "ticket_service"):
         return []
-    from rag.bobohui import HOOK_TOPIC, hall_hook
-    return [hall_hook(HOOK_TOPIC.get(intent, "这些"))]
+    from rag.bobohui import hall_hook
+    return [hall_hook(spoken_topic(intent, persona))]
 
 
 def spoken_topic(intent: str, persona=None) -> str:
     """句尾问的是谁的事。莫奈问作品，妇好问经历，鸠摩罗什问经历，不把别人说成作品。"""
     from rag.bobohui import HOOK_TOPIC
-    topic = HOOK_TOPIC.get(intent or "knowledge", "这些")
+    lookup = intent or "knowledge"
+    if lookup == "transcript":
+        lookup = "knowledge"
+    topic = HOOK_TOPIC.get(lookup, "这些")
     pid = persona if isinstance(persona, str) else (getattr(persona, "id", "") or "")
     if topic != "我的作品":
         return topic
     if pid == "fuhao":
-        return "我的器物" if intent == "exhibit" else "我的经历"
+        return "我的器物" if lookup == "exhibit" else "我的经历"
     if pid == "kumarajiva":
-        return "我的译经" if intent == "exhibit" else "我的经历"
+        return "我的译经" if lookup == "exhibit" else "我的经历"
     return topic
 
 
@@ -317,19 +320,21 @@ def spoken_followup(intent: str, text: str = "", persona=None) -> str:
 
 
 def append_spoken_followup(text: str, intent: str, persona=None) -> str:
-    """讲完再问一句，请游客继续问。正文已经在发问，或已经问过，就不再加。"""
+    """讲完再请游客继续问。正文已经是问句时，只接一句不带问号的邀请。"""
     raw = (text or "").strip()
     if not raw or raw.startswith("这个我还不太清楚") or raw.startswith("抱歉"):
         return raw
-    if raw.endswith("？") or raw.endswith("?"):
-        return raw
     if intent in ("command", "ticket_service"):
         return raw
-    from rag.bobohui import spoken_closings
-    pool = spoken_closings(spoken_topic(intent, persona))
+    if "您想先试哪一项" in raw:
+        return raw
+    from rag.bobohui import pick_spoken_statement, spoken_closings
+    topic = spoken_topic(intent, persona)
+    pool = spoken_closings(topic)
     if any(line and line in raw for line in pool):
         return raw
-    hook = spoken_followup(intent, raw, persona)
+    asking = raw.endswith("？") or raw.endswith("?")
+    hook = pick_spoken_statement(topic, raw) if asking else spoken_followup(intent, raw, persona)
     if not hook:
         return raw
     if raw[-1] not in "。！？":

@@ -93,19 +93,23 @@ def test_weather_fact_then_back_to_hall():
 def test_fuhao_and_kumarajiva_hooks_match_their_halls():
     banned = ("睡莲", "莫奈", "印象派", "日出", "甲骨", "舍利盒")
     expect = {
-        "exhibit": "了解完我的作品",
         "person": "了解完我的经历",
         "visit": "了解完展会安排",
         "chitchat": "了解完我的介绍",
         "weather": "了解完天气",
         "news": "了解完新闻",
     }
+    exhibit = {"monet": "了解完我的作品", "fuhao": "了解完我的器物", "kumarajiva": "了解完我的译经"}
+    knowledge = {"monet": "了解完我的作品", "fuhao": "了解完我的经历", "kumarajiva": "了解完我的经历"}
     tail = "您还想了解博博会或宽创展台的哪些内容呢？"
     for pid in ("fuhao", "kumarajiva", "monet"):
         persona = _persona(pid)
-        for intent, head in expect.items():
+        heads = dict(expect)
+        heads["exhibit"] = exhibit[pid]
+        heads["knowledge"] = knowledge[pid]
+        for intent, head in heads.items():
             hooks = suggest_hooks(intent, RealtimeMemory(), persona, ["青铜钺"])
-            assert hooks == ["%s，%s" % (head, tail)]
+            assert hooks == ["%s，%s" % (head, tail)], (pid, intent, hooks)
             assert all(word not in hook_text for hook_text in hooks for word in banned)
 
 

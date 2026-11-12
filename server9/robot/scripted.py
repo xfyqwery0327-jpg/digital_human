@@ -100,10 +100,15 @@ def fixed_script_wav(persona_id: str, query: str) -> Optional[Path]:
     return _AUDIO_DIR / item["wav"]
 
 
-# 「你还有什么功能」「你还能干什么」不讲作品，直接报这五样。
-_CAPABILITY = re.compile(
-    r"还能(?:干什么|做什么|干嘛|做些什么|做点什么|干些什么)|"
-    r"(?:还有|有)?(?:什么|哪些|啥)功能"
+# 问数字人本人还能干什么。句子里顺带出现「什么功能」不算。
+_CAPABILITY_DO = re.compile(
+    r"(?:你|您).{0,8}还能(?:干什么|做什么|干嘛|做些什么|做点什么|干些什么)"
+)
+_CAPABILITY_FUNC = re.compile(
+    r"(?:你|您).{0,8}(?<!没)(?:还有|有)(?:什么|哪些|啥)功能"
+)
+_CAPABILITY_BARE = re.compile(
+    r"^(?:还能(?:干什么|做什么|干嘛|做些什么|做点什么|干些什么)|(?:还有|有)(?:什么|哪些|啥)功能)呢?$"
 )
 CAPABILITY_REPLY = (
     "我本事可不少，给您数五样："
@@ -117,11 +122,13 @@ CAPABILITY_REPLY = (
 
 
 def is_capability_question(query: str) -> bool:
-    """问数字人还能干什么。三段作品稿不走这里。"""
+    """问数字人还能干什么。三段作品稿不走这里。「没什么功能」也不算。"""
     q = _norm(query)
     if not q or _match_item("monet", query):
         return False
-    return bool(_CAPABILITY.search(q))
+    if _CAPABILITY_DO.search(q) or _CAPABILITY_FUNC.search(q):
+        return True
+    return bool(_CAPABILITY_BARE.fullmatch(q))
 
 
 def capability_reply(query: str) -> str:

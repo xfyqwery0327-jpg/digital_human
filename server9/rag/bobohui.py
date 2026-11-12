@@ -34,17 +34,19 @@ _WHERE = re.compile(
     r"在哪里举办|哪里举办|哪个馆|什么地方办|"
     r"人在不在|你在不在|是不是在现场"
 )
-_PRESENCE_LEAD = re.compile(
+# 先匹配带展厅的整段位置，再匹配「我此刻就在」这种开口。只削开头，留下后面的事。
+_BOOTH_LEAD = re.compile(
     r"^(?:"
-    r"我(?:此刻|就)?在这里[，,]"
-    r"|我(?:此刻)?就在(?:这场)?博博会现场(?:的)?(?:宽创(?:国际)?)?(?:的)?展[厅台]里[，,]?"
-    r"|人就在宽创(?:国际)?的展[厅台]里[，,]?"
+    r"我此刻就在(?:这场)?博博会(?:现场)?(?:的)?(?:宽创(?:国际)?)?(?:的)?(?:展[厅台]|站台)?[里中]?[，,]?"
+    r"|我(?:此刻)?就在这里[，,]?"
+    r"|我(?:此刻)?在这里[，,]?"
+    r"|我此刻就在[，,]?"
+    r"|我就在(?:这场)?博博会(?:现场)?(?:的)?(?:宽创(?:国际)?)?(?:的)?(?:展[厅台]|站台)?[里中]?[，,]?"
+    r"|人就在宽创(?:国际)?(?:的)?(?:展[厅台]|站台)?[里中]?[，,]?"
+    r"|就在(?:这场)?博博会(?:现场)?(?:的)?(?:宽创(?:国际)?)?(?:的)?(?:展[厅台]|站台)?[里中]?[，,]?"
+    r"|就在宽创(?:国际)?(?:的)?(?:展[厅台]|站台)?[里中]?[，,]?"
+    r"|就在这场[，,]?"
     r")"
-)
-_PRESENCE_START = (
-    "我在这里", "我就在这里", "我此刻就在", "我此刻在这里",
-    "我就在博博会", "我就在这场", "人就在宽创",
-    "就在博博会", "就在宽创", "就在这场",
 )
 _PRESENCE_ONLY = re.compile(
     r"^(?:就在|人就在|我(?:此刻)?就在)"
@@ -82,7 +84,7 @@ def spoken_closings(topic: str) -> list:
     topic = re.sub(r"\s+", "", topic or "") or "这些"
     return [
         hall_hook(topic),
-        "关于%s，还想再听一段，还是换个博博会的话题？" % topic,
+        "关于%s，您还想再听一段，还是换个博博会的话题？" % topic,
         "%s先讲到这儿。您要是想问博博会或宽创展台，直接说就行。" % topic,
         "我还能接着讲。您是想继续听%s，还是看看这届博博会？" % topic,
         "还有想了解的，尽管问。博博会和宽创展台的事我都可以说。",
@@ -100,6 +102,22 @@ def pick_spoken_closing(topic: str, seed: str = "") -> str:
     return pool[zlib.adler32(key.encode("utf-8")) % len(pool)]
 
 
+def spoken_statements(topic: str) -> list:
+    """正文已经在发问时，只接不带问号的邀请，避免连着两句问话。"""
+    topic = re.sub(r"\s+", "", topic or "") or "这些"
+    return [
+        "%s先讲到这儿。您要是想问博博会或宽创展台，直接说就行。" % topic,
+        "还有想了解的，尽管问。博博会和宽创展台的事我都可以说。",
+    ]
+
+
+def pick_spoken_statement(topic: str, seed: str = "") -> str:
+    import zlib
+    pool = spoken_statements(topic)
+    key = (seed or topic or "这些").strip()
+    return pool[zlib.adler32(key.encode("utf-8")) % len(pool)]
+
+
 def is_bobohui_question(question: str) -> bool:
     return bool(_ASK.search(question or ""))
 
@@ -109,23 +127,40 @@ def asks_where(question: str) -> bool:
     return bool(_WHERE.search(question or ""))
 
 
-def _presence_sentence(sentence: str) -> bool:
+def _peel_location(sentence: str) -> str:
+    """削掉句首的展厅位置。后面还有要讲的事就留下，纯位置则削空。"""
+    cur = (sentence or "").strip()
+    for _ in range(4):
+        matched = _BOOTH_LEAD.match(cur)
+        if not matched:
+            break
+        nxt = cur[matched.end():].lstrip("，, ")
+        if nxt == cur:
+            break
+        cur = nxt
+    return cur.strip()
+
+
+def _only_location(sentence: str) -> bool:
     text = (sentence or "").strip()
     if _PRESENCE_ONLY.match(text):
         return True
-    if not text.startswith(_PRESENCE_START):
-        return False
     bare = re.sub(r"[\s，,。！？、；：]", "", text)
-    rest = _LOC_FILL.sub("", bare)
-    return len(rest) <= 4
+    if not bare:
+        return True
+    return _LOC_FILL.sub("", bare) == ""
+
+
+def _presence_sentence(sentence: str) -> bool:
+    """整句只在报位置。短内容如「画睡莲」「作画」不算位置。"""
+    return _only_location(_peel_location(sentence))
 
 
 def _drop_presence_lead(sentence: str) -> str:
-    text = (sentence or "").strip()
-    matched = _PRESENCE_LEAD.match(text)
-    if not matched:
-        return text
-    return text[matched.end():].lstrip("，,。 ")
+    peeled = _peel_location(sentence)
+    if _only_location(peeled):
+        return ""
+    return peeled
 
 
 def strip_unasked_here(question: str, text: str) -> str:

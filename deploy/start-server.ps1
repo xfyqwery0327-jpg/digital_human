@@ -36,16 +36,55 @@ function Test-Port8848 {
     }
 }
 
+function Wait-QwenTts([string]$BaseUrl, [int]$Seconds) {
+    # 8812 要等模型进显存才监听。8848 只在自己启动时探一次，超时 2 秒。
+    # 这里先等到 /health 成功，再拉起讲解员，避免 tts_error 被写成「口播入口未就绪」。
+    $url = $BaseUrl.TrimEnd("/") + "/health"
+    Write-Boot ("waiting for " + $url + " up to " + $Seconds + "s")
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 3
+            if ($resp.StatusCode -eq 200) {
+                $payload = $resp.Content | ConvertFrom-Json
+                if ($payload.ok -eq $true -or $payload.tts -eq $true) {
+                    $names = ""
+                    if ($payload.speakers) { $names = (@($payload.speakers) -join ",") }
+                    Write-Boot ("qwen-tts-service ready speakers=" + $names)
+                    return $true
+                }
+            }
+        } catch {
+        }
+        Start-Sleep -Seconds 2
+    }
+    Write-Boot ("qwen-tts-service not ready after " + $Seconds + "s")
+    return $false
+}
+
 function Find-RobotPython {
-    # 环境 digital_human_server 已安装且经手动验证可用，无需每次开机重跑
-    # server-env.ps1（它 import torch 会打印 NOTE，5.1 在 Stop 下当错误抛出，
-    # 导致开机任务 8848 起不来）。直接检测固定路径。
-    $candidates = @(
-        (Join-Path $env:USERPROFILE ".conda\envs\digital_human_server\python.exe"),
-        "D:\anaconda\envs\digital_human_server\python.exe"
+    # 本机讲解员在 miniconda 的 robot。digital_human_server 只有 torch，缺 fastapi。
+    $names = @("robot", "digital_human_server")
+    $roots = @()
+    if ($env:USERPROFILE) {
+        $roots += (Join-Path $env:USERPROFILE ".conda\envs")
+        $roots += (Join-Path $env:USERPROFILE "miniconda3\envs")
+    }
+    $roots += @(
+        "C:\Users\BroadMesse\miniconda3\envs",
+        "D:\anaconda\envs",
+        "D:\conda-envs"
     )
-    foreach ($path in $candidates) {
-        if ($path -and (Test-Path $path)) { return $path }
+    $seen = @{}
+    foreach ($name in $names) {
+        foreach ($root in $roots) {
+            $py = Join-Path $root ($name + "\python.exe")
+            if ($seen.ContainsKey($py)) { continue }
+            $seen[$py] = $true
+            if (-not (Test-Path $py)) { continue }
+            & cmd.exe /c "`"$py`" -c `"import fastapi,uvicorn,faiss,requests`" >nul 2>nul"
+            if ($LASTEXITCODE -eq 0) { return $py }
+        }
     }
     return $null
 }
@@ -116,6 +155,10 @@ try {
     ) | Where-Object { $_ -and (Test-Path $_) }
     $env:PATH = ($CondaEnv + ";" + ($extras -join ";") + ";" + $env:PATH)
     Write-Boot ("python=" + $Python + " tts=qwen-tts-service url=" + $env:TTS_QWEN_URL + " remote=" + $env:TTS_QWEN_REMOTE + " alloc=" + $env:PYTORCH_CUDA_ALLOC_CONF)
+    $ttsReady = Wait-QwenTts $env:TTS_QWEN_URL 180
+    if (-not $ttsReady) {
+        Write-Boot "start 8848 without a ready 8812; health tts_error will keep the probe failure"
+    }
 
     Set-Location $Root
     Add-Content -Path $outLog -Value ("`r`n==== " + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + " start ====`r`n")

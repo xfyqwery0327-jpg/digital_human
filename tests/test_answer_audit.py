@@ -67,8 +67,9 @@ def audit():
             already_asking = answer.rstrip().endswith("？") or answer.rstrip().endswith("?")
             hooks = _hook_count(spoken, "knowledge", persona)
             if already_asking:
-                if spoken != cleaned:
-                    add("两问", pid, "原文已是问句，又接了一句：%s" % question[:24])
+                extra = spoken[len(cleaned):] if spoken.startswith(cleaned) else spoken
+                if "？" in extra or "?" in extra:
+                    add("两问", pid, "原文已是问句，又接了问句：%s" % question[:24])
             elif hooks != 1:
                 add("句尾", pid, "「%s」句尾问话 %s 句" % (question[:24], hooks))
             if pid != "monet" and "我的作品" in spoken[len(cleaned):]:

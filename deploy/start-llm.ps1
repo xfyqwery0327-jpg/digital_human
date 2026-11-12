@@ -1,6 +1,6 @@
 ﻿# 开机拉起大模型 8080：llama-server.exe，关闭思考模式。
 # 不带 -Model 时读 deploy\last-start.txt 的 llm=，再读 deploy\llm.model。
-# 两处都没有就用 Qwen3-8B-Q4_K_M.gguf。
+# 两处都没有就用 Qwen3-4B-Instruct-2507-Q4_K_M.gguf。
 # 4B 与 switch.ps1 同一文件名：Qwen3-4B-Instruct-2507-Q4_K_M.gguf。
 param(
     [switch]$Foreground,
@@ -73,8 +73,49 @@ function Resolve-LlmPath {
             if ($raw) { $tag = Resolve-LlmTag (($raw -split "\s+")[0]) }
         }
     }
-    if (-not $tag) { $tag = "8" }
+    if (-not $tag) { $tag = "4" }
     return Join-Path $Root ("models\" + $names[$tag])
+}
+
+function Find-CudaLlamaServer {
+    $candidates = @(
+        "D:\projects\Robot_Intelligent_Voice_System\models\llama\llama-server.exe",
+        (Join-Path $Root "models\llama\llama-server.exe"),
+        "C:\Users\BroadMesse\Downloads\llamacpp\llama-server.exe"
+    )
+    foreach ($path in $candidates) {
+        if (-not (Test-Path $path)) { continue }
+        $dir = Split-Path $path
+        $cuda = @(Get-ChildItem -Path $dir -Filter "ggml-cuda*.dll" -ErrorAction SilentlyContinue)
+        if ($cuda.Count -gt 0) { return $path }
+    }
+    return $null
+}
+
+function Find-LlmPython {
+    $names = @("robot", "digital_human_server")
+    $roots = @()
+    if ($env:USERPROFILE) {
+        $roots += (Join-Path $env:USERPROFILE ".conda\envs")
+        $roots += (Join-Path $env:USERPROFILE "miniconda3\envs")
+    }
+    $roots += @(
+        "C:\Users\BroadMesse\miniconda3\envs",
+        "D:\anaconda\envs",
+        "D:\conda-envs"
+    )
+    $seen = @{}
+    foreach ($name in $names) {
+        foreach ($root in $roots) {
+            $py = Join-Path $root ($name + "\python.exe")
+            if ($seen.ContainsKey($py)) { continue }
+            $seen[$py] = $true
+            if (-not (Test-Path $py)) { continue }
+            & cmd.exe /c "`"$py`" -c `"import llama_cpp`" >nul 2>nul"
+            if ($LASTEXITCODE -eq 0) { return $py }
+        }
+    }
+    return $null
 }
 
 try {
@@ -85,11 +126,34 @@ try {
         exit 0
     }
 
-    # llama-server.exe 复用 Robot_Intelligent_Voice_System 的二进制（讲解员目录无此 exe）。
-    $exe = "D:\projects\Robot_Intelligent_Voice_System\models\llama\llama-server.exe"
-    if (-not (Test-Path $exe)) {
-        Write-Boot ("llama-server.exe not found: " + $exe)
-        throw "llama-server.exe not found"
+    # 优先用带 CUDA 的 llama-server.exe。本机 Downloads 里那份是 CPU 包，不能拿来占 4070。
+    $exe = Find-CudaLlamaServer
+    if (-not $exe) {
+        $Python = Find-LlmPython
+        if (-not $Python) {
+            Write-Boot "cuda llama-server.exe missing and no python can import llama_cpp"
+            throw "llama runtime not found"
+        }
+        $model = Resolve-LlmPath
+        if (-not (Test-Path $model)) {
+            Write-Boot ("model not found: " + $model)
+            throw "model not found"
+        }
+        if (Test-Path $outLog) { Remove-Item $outLog -Force -ErrorAction SilentlyContinue }
+        if (Test-Path $errLog) { Remove-Item $errLog -Force -ErrorAction SilentlyContinue }
+        Write-Boot ("starting llama_cpp.server python=" + $Python + " model=" + (Split-Path $model -Leaf))
+        $p = Start-Process -FilePath $Python -ArgumentList @(
+            "-m", "llama_cpp.server",
+            "--model", $model,
+            "--n_gpu_layers", "-1",
+            "--n_ctx", "2048",
+            "--host", "127.0.0.1",
+            "--port", "8080",
+            "--chat_format", "chatml"
+        ) -WorkingDirectory $Root -WindowStyle Hidden `
+            -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
+        Write-Boot ("llama_cpp.server started pid=" + $p.Id)
+        exit 0
     }
     $model = Resolve-LlmPath
     if (-not (Test-Path $model)) {

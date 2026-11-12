@@ -47,7 +47,7 @@ echo.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0deploy\switch.ps1" -Action saved
 echo.
 echo 1 开启  按上次的讲解模型启动 8080 和讲解员 8848
-echo 2 关闭
+echo 2 关闭  停 8080、8848 和 8812
 echo 3 状态
 echo 4 改用 Qwen3-4B，并启动讲解模型
 echo 5 改用 Qwen3-8B，并启动讲解模型
@@ -76,8 +76,9 @@ echo 同一时间只开一个讲解模型。
 echo 4 或 llm 4 是 Qwen3-4B，文件 models\Qwen3-4B-Instruct-2507-Q4_K_M.gguf。
 echo 5 或 llm 8 是 Qwen3-8B，文件 models\Qwen3-8B-Q4_K_M.gguf。
 echo 语音固定走独立服务 qwen-tts-service，地址 http://127.0.0.1:8812。
+echo 开启时若 8812 没在听，会先拉起 qwen-tts-service，讲解员再等它的 /health。
 echo 进程内 Qwen3-TTS、SGLang WebSocket、CosyVoice 已停用，菜单里不能再选。
-echo 6、restart、9 重启讲解员，只动 8848，不动 8080。
+echo 6、restart、9 重启讲解员，只动 8848。8812 没在听时会先拉起，8080 不动。
 echo 数字 2 是关闭。数字 4 和 5 才是讲解模型。
 echo 开机自启读 deploy\last-start.txt 里的讲解模型。语音不再跟着旧记录切换。
 goto finish

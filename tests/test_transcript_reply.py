@@ -2,6 +2,7 @@
 """观众实录问句对上时照搬回答，短问候不能误撞。"""
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -71,6 +72,15 @@ def test_fuhao_booth_questions_are_copied():
     owl = match_transcript("那可以详细讲讲这件妇好鸮尊吗？", rows)
     assert owl.startswith("鸮尊是我墓中代表性青铜酒礼器") and "妇好" in owl
     assert match_transcript("你打过最厉害的一仗是哪场？", rows) == ""
+    assert "三个关键词" in match_transcript("你会占卜吗", rows)
+    assert "一万三千" in match_transcript("哪场战役印象最深", rows)
+    assert "鬯酒" in match_transcript("你还会酿酒吗", rows)
+    assert match_transcript("详细讲讲鸮尊", rows).startswith("鸮尊是我墓中代表性青铜酒礼器")
+    assert match_transcript("妇好鸮尊是什么", rows).startswith("鸮尊是我墓中代表性青铜酒礼器")
+    full = json.loads((ROOT / "kb" / "fuhao" / "transcript.json").read_text(encoding="utf-8"))
+    assert "热血沸腾" in match_transcript("你打过最厉害的一仗是哪场？", full)
+    assert match_transcript("哪场战役印象最深", full).startswith("印象最深的是伐羌方")
+    assert "三个关键词" in match_transcript("你会占卜吗", full)
 
 
 def test_narrative_keeps_ten_pieces():
