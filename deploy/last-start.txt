@@ -1,4 +1,4 @@
-llm=4
+llm=8
 tts=qwen-service
 cosyvoice=3
-started=2026-11-05T16:19:38
+started=2026-11-12T14:38:05

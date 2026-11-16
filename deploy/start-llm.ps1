@@ -146,7 +146,7 @@ try {
             "-m", "llama_cpp.server",
             "--model", $model,
             "--n_gpu_layers", "-1",
-            "--n_ctx", "2048",
+            "--n_ctx", "4096",
             "--host", "127.0.0.1",
             "--port", "8080",
             "--chat_format", "chatml"
@@ -165,14 +165,14 @@ try {
     if (Test-Path $outLog) { Remove-Item $outLog -Force -ErrorAction SilentlyContinue }
     if (Test-Path $errLog) { Remove-Item $errLog -Force -ErrorAction SilentlyContinue }
 
-    # 与历史运行一致的槽位：-np 4 -c 8192(每槽2048)。--reasoning off 关闭思考，直接输出 content。
+    # 单槽。-c 4096 是这一槽的上下文，比原来每槽 2048 稍大。--reasoning off 关闭思考，直接输出 content。
     # 不写 --slot-save-path，KV / prompt cache 只在本进程内存里，进程退出即清空。
     $args = @(
         "-m", $model,
         "-ngl", "99",
         "-fa", "on",
-        "-c", "8192",
-        "-np", "4",
+        "-c", "4096",
+        "-np", "1",
         "-t", "8",
         "--host", "127.0.0.1",
         "--port", "8080",
