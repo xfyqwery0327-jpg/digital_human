@@ -136,11 +136,11 @@ def _robot_knowledge_turn_locked(question: str, session: SessionState, top_k: in
         system_extra = "\n\n本次是语音口播，回答尽量短，一句为宜，不要超过两句。"
         max_tokens = ASK_MAX_TOKENS
     from rag.speech_lang import output_rule, reply_lang_of
-    from rag.bobohui import PRESENCE_RULE
+    from rag.bobohui import ANSWER_RULE, PRESENCE_RULE
     user_content = (
         f"【参考资料】\n{ref}\n\n【问题】{question}\n\n"
         f"{works_answer_hint(question, persona)}"
-        "展会只介绍博博会，不要介绍原先的展，也不要报原先的门票价格。"
+        f"{ANSWER_RULE}"
         "问到本人作品或经历时只讲事情本身，不要说这场展有我的作品。"
         f"{PRESENCE_RULE}"
         f"{output_rule(reply_lang_of(session))}"

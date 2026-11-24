@@ -160,7 +160,7 @@ def _parse_persona(data: dict, fallback_id: str) -> PersonaConfig:
     refuse = str(data.get("refuse_text") or "").strip()
     if not refuse:
         refuse = "这个我还不太清楚。我只讲解眼前这场展。"
-    return PersonaConfig(
+    cfg = PersonaConfig(
         id=pid,
         display_name=str(data.get("display_name") or pid),
         enabled=bool(data.get("enabled", True)),
@@ -190,6 +190,8 @@ def _parse_persona(data: dict, fallback_id: str) -> PersonaConfig:
             str(k): str(v) for k, v in (data.get("exhibit_aliases") or {}).items()
         } if isinstance(data.get("exhibit_aliases") or {}, dict) else {},
     )
+    from rag.scene import apply_scene
+    return apply_scene(cfg)
 
 
 class PersonaRegistry:

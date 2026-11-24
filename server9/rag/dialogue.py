@@ -318,7 +318,7 @@ def remember_news(session, key: str) -> None:
 
 
 def prepare_realtime(question: str, session, persona) -> dict:
-    """天气或新闻：取缓存或现查，口播后带回博博会。不是这两类时返回空。"""
+    """天气或新闻：取缓存或现查，口播后带回当前场地。不是这两类时返回空。"""
     kind = rule_intent(question, session)
     if kind not in ("weather", "news"):
         return {}
@@ -413,7 +413,7 @@ def append_spoken_followup(text: str, intent: str, persona=None) -> str:
 
 
 def visit_fact_reply(question: str, persona) -> str:
-    """问展会时间和地点只答博博会。原先门票价格不报。问作品不走这里。"""
+    """问时间和地点只答当前场地。原先门票价格不报。问作品不走这里。"""
     del persona
     q = question or ""
     if _BOOK.search(q):

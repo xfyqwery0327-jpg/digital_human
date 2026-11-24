@@ -133,7 +133,7 @@ def audit():
     asked = append_spoken_followup(visit, "visit")
     if not asked.startswith(visit) or _hook_count(asked, "visit") != 1:
         add("句尾", "参观", asked)
-    if "我在这里" not in visit and "我就在博博会" not in visit:
+    if "我在这里" not in visit and "我就在宽创大厅" not in visit and "我就在博博会" not in visit:
         add("报位置", "参观", "问展览在哪时没有说明人在现场")
 
     return issues

@@ -18,7 +18,7 @@ from rag.speech_lang import LANGS, detect_lang, output_rule, prepare_spoken
 from tts.speaktext import find_sentence_end, split_by_marks
 from config import LLM_URL
 
-ASK = "用五到六句讲你此刻在博博会宽创展厅里看到的光和颜色。每句都写完整。"
+ASK = "用五到六句讲你此刻在宽创大厅里看到的光和颜色。每句都写完整。"
 
 
 def _peak(pcm: bytes) -> int:
@@ -46,7 +46,7 @@ def _pipeline(code: str, persona):
     messages = [{
         "role": "user",
         "content": (
-            "你是莫奈，人就在博博会现场的宽创展厅里。%s\n问题：%s\n/no_think" % (rule, ASK)
+            "你是莫奈，人就在宽创大厅里。%s\n问题：%s\n/no_think" % (rule, ASK)
         ),
     }]
 

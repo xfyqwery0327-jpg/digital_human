@@ -86,16 +86,16 @@ def test_three_personas_only_speak_bobohui():
         samples[pid] = lines
         prompt = persona.system_prompt
         assert "不要说这场展有我的" in prompt or "不要说这场展有我的作品" in prompt or "不要说这场展有我的器物" in prompt
-        assert "原先" in prompt and "博博会" in prompt
+        assert "原先" in prompt and "宽创大厅" in prompt
         assert "浪漫与星辰" not in (persona.ticket_info.get("price") or "")
         for label in ("天气口播", "新闻口播", "开放时间", "地点"):
             text = lines[label]
-            assert "博博会" in text, (pid, label, text)
+            assert "宽创大厅" in text, (pid, label, text)
             assert all(word not in text for word in OLD_SHOW), (pid, label, text)
         assert all(word not in lines["门票"] for word in OLD_SHOW)
         assert lines["作品问题"] == ""
         assert lines["门票"] == "原先的门票价格我不介绍。"
-        assert "我就在博博会现场的宽创展厅里" in lines["开放时间"]
+        assert "我就在宽创大厅里" in lines["开放时间"]
         assert "在那里" not in lines["开放时间"] and "我听说" not in lines["开放时间"]
         assert "不要说在那里" in prompt and "不要说我听说" in prompt
         assert is_other_exhibition_query("浪漫与星辰什么时候开展", persona)

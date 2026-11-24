@@ -12,7 +12,7 @@ from llm.client import clean_full_answer, llm_collect
 from rag.speech_lang import LANGS, detect_lang, output_rule, prepare_spoken, qwen_language_of
 from tts.remote import qwen_service_url, synthesize_pcm, tts_payload
 
-ASK = "用一句话说明你此刻就在博博会的宽创展厅里。"
+ASK = "用一句话说明你此刻就在宽创大厅里。"
 OUT = ROOT / "tests" / "_lang_tts"
 
 
@@ -29,7 +29,7 @@ def _llm(code: str) -> str:
     rule = output_rule(code)
     messages = [{
         "role": "user",
-        "content": "你是莫奈，人就在博博会现场的宽创展厅里。%s\n问题：%s\n/no_think" % (rule, ASK),
+        "content": "你是莫奈，人就在宽创大厅里。%s\n问题：%s\n/no_think" % (rule, ASK),
     }]
     raw = clean_full_answer(llm_collect(messages, max_tokens=180))
     spoken = prepare_spoken(raw, code)

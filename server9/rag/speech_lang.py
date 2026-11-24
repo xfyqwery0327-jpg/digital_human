@@ -71,10 +71,16 @@ _NAME = {
     "ja": "中国博物館エキスポ",
     "ko": "중국 박물관 엑스포",
 }
+_HALL_NAME = {
+    "zh": "宽创大厅",
+    "en": "Broadmesse Hall",
+    "ja": "ブロードメッセホール",
+    "ko": "브로드메세 홀",
+}
 _PROPER = {
-    "en": "博博会是专名，必须写成 China Museum Expo，不要写成博博会。宽创国际写成 Kuanchuang。数字用阿拉伯数字。句号用英文句点，逗号用英文逗号。",
-    "ja": "博博会是专名，必须写成中国博物館エキスポ，不要写成博博会。句号用。，停顿用、。",
-    "ko": "博博会是专名，必须写成중국 박물관 엑스포，不要写成博博会，整段不要出现汉字。数字用阿拉伯数字。句号用英文句点，逗号用英文逗号。",
+    "en": "博博会是专名，必须写成 China Museum Expo，不要写成博博会。宽创大厅写成 Broadmesse Hall。宽创国际写成 Kuanchuang。数字用阿拉伯数字。句号用英文句点，逗号用英文逗号。",
+    "ja": "博博会是专名，必须写成中国博物館エキスポ，不要写成博博会。宽创大厅写成ブロードメッセホール。句号用。，停顿用、。",
+    "ko": "博博会是专名，必须写成중국 박물관 엑스포，不要写成博博会。宽创大厅写成브로드메세 홀。整段不要出现汉字。数字用阿拉伯数字。句号用英文句点，逗号用英文逗号。",
 }
 _GLUE = {
     "en": {"以后": "after"},
@@ -215,6 +221,7 @@ def polish_spoken(text: str, code: str = "zh") -> str:
     """去掉思考标记，换上专名，英语和韩语里的汉字数字改成阿拉伯数字。"""
     code = code if code in LANGS else "zh"
     spoken = _THINK.sub("", text or "")
+    spoken = spoken.replace("宽创大厅", _HALL_NAME.get(code) or "宽创大厅")
     spoken = spoken.replace("博博会", _NAME.get(code) or "博博会")
     for old, new in _GLUE.get(code, {}).items():
         spoken = spoken.replace(old, new)
@@ -234,7 +241,7 @@ def _still_dirty(text: str, code: str) -> bool:
     if code == "ko":
         return len(_HAN.findall(text or "")) >= 2
     if code == "ja":
-        return "博博会" in (text or "")
+        return "博博会" in (text or "") or "宽创大厅" in (text or "")
     return False
 
 

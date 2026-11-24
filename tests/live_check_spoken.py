@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""现场看天气、新闻，以及三个人物介绍博博会。需要外网；介绍博博会还需要本机大模型。"""
+"""现场看天气、新闻，以及三个人物介绍宽创发展。需要外网；介绍公司还需要本机大模型。"""
 import socket
 import sys
 from pathlib import Path
@@ -12,13 +12,13 @@ from persona.runtime import bind
 from config import LLM_URL, PERSONAS_DIR
 from llm.client import clean_full_answer, llm_collect
 from llm.persona import system_prompt
-from rag.bobohui import TEXT, merge_bobohui
+from rag.bobohui import ANSWER_RULE, PRESENCE_RULE, TEXT, merge_bobohui
 from rag.dialogue import RealtimeMemory, prepare_realtime
 from rag.search import works_answer_hint
 from rag.visit import visit_hint
 
 OLD = ("浪漫与星辰", "贵州省博物馆", "这场商代", "龟兹博物馆", "七十八元", "四十九元", "这场展有我的")
-ASK = "介绍一下第十一届博博会"
+ASK = "介绍一下宽创的发展历程"
 
 
 def _persona(pid):
@@ -55,9 +55,9 @@ def bobohui_answer(persona):
     ref = "\n".join("- %s" % h["text"] for h in hits)
     user_prompt = "【参考资料】\n%s\n\n【问题】%s" % (ref, ASK)
     user_prompt += (
-        "\n\n展会只介绍博博会，不要介绍原先的展，也不要报原先的门票价格。"
-        "问到本人作品或经历时只讲事情本身，不要说这场展有我的作品。"
-        "你人就在博博会现场的宽创展厅里，这是事实，但不要主动报位置。不要说在那里，不要说我听说。只有观众问你在哪里、展厅在哪时，才说我就在这里。讲作品时不要先说我在这里。\n"
+        "\n\n" + ANSWER_RULE
+        + "问到本人作品或经历时只讲事情本身，不要说这场展有我的作品。"
+        + PRESENCE_RULE
     )
     user_prompt += works_answer_hint(ASK, persona)
     user_prompt += visit_hint(ASK, persona)
@@ -86,18 +86,18 @@ def main():
     print("两条新闻是否同一条:", "是" if same else "否")
     print()
     if not _llm_up():
-        print("本机大模型未开，三个人物的博博会介绍没有口播。")
+        print("本机大模型未开，三个人物的宽创发展介绍没有口播。")
         print("会注入的资料是：")
         print(TEXT)
         return 1
     for pid in ("monet", "fuhao", "kumarajiva"):
         p = _persona(pid)
         text = bobohui_answer(p)
-        print("【%s 介绍博博会】字数=%s" % (p.display_name, len(text)))
+        print("【%s 介绍宽创发展】字数=%s" % (p.display_name, len(text)))
         print(text)
         bad = [word for word in OLD if word in text]
         print("旧展会残留:", "无" if not bad else "、".join(bad))
-        print("提到博博会:", "是" if "博博会" in text else "否")
+        print("提到发展历程:", "是" if "2005" in text or "二零零五" in text else "否")
         print("说了在那里:", "是" if "在那里" in text else "否")
         print("说了我听说:", "是" if "我听说" in text else "否")
         print()

@@ -392,10 +392,10 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                 user_prompt = f"【对话历史】\n{history_text}\n" + user_prompt
             if entity_context:
                 user_prompt = f"【实体上下文】最近提到: {entity_context}\n\n" + user_prompt
-            from rag.bobohui import PRESENCE_RULE
+            from rag.bobohui import ANSWER_RULE, PRESENCE_RULE
             user_prompt += (
-                "\n\n展会只介绍博博会，不要介绍原先的展，也不要报原先的门票价格。"
-                "问到本人作品或经历时只讲事情本身，不要说这场展有我的作品。"
+                "\n\n" + ANSWER_RULE
+                + "问到本人作品或经历时只讲事情本身，不要说这场展有我的作品。"
                 + PRESENCE_RULE
             )
             from rag.speech_lang import output_rule, reply_lang_of

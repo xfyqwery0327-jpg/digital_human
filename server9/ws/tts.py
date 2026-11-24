@@ -862,12 +862,12 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
                     contexts = read_hits(hits)
                     ref = "\n".join(f"- {c}" for c in contexts)
                     from rag.speech_lang import output_rule, reply_lang_of
-                    from rag.bobohui import PRESENCE_RULE
+                    from rag.bobohui import ANSWER_RULE, PRESENCE_RULE
                     user_content = (
                         f"【参考资料】\n{ref}\n\n【问题】{user_question}\n\n"
                         f"{works_answer_hint(user_question, persona)}"
                         f"{visit_hint(user_question, persona)}"
-                        "展会只介绍博博会，不要介绍原先的展，也不要报原先的门票价格。"
+                        f"{ANSWER_RULE}"
                         "问到本人作品或经历时只讲事情本身，不要说这场展有我的作品。"
                         f"{PRESENCE_RULE}"
                         f"{output_rule(reply_lang_of(dialogue_state))}/no_think"

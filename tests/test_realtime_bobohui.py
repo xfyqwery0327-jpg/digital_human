@@ -107,13 +107,14 @@ def test_cache_clock_is_beijing():
     assert next_beijing_clock(0, evening) == datetime(2026, 11, 1, 0, 0, tzinfo=sh)
 
 
-def test_bobohui_is_this_expo_not_another_show():
+def test_hall_restores_company_history():
     persona = _persona("monet")
-    assert is_bobohui_question("第十一届博博会什么时候开")
-    assert not is_other_exhibition_query("第十一届博博会什么时候开", persona)
+    assert is_bobohui_question("宽创的发展历程是怎样的")
+    assert not is_other_exhibition_query("宽创的发展历程是怎样的", persona)
     assert is_other_exhibition_query("介绍一下别的博览会", persona)
-    hits = merge_bobohui("博博会在哪里举办", [], 0.35)
-    assert hits and "宽创国际" in hits[0]["text"]
+    hits = merge_bobohui("宽创的发展历程是怎样的", [], 0.35)
+    assert hits and "2005" in hits[0]["text"] and "沉浸式" in hits[0]["text"]
+    assert "海南国际会展中心" not in hits[0]["text"]
     assert hits[0]["score"] >= 0.35
 
 

@@ -15,7 +15,7 @@ from config import MIN_SCORE_RERANK, MIN_SCORE_RRF
 from llm.client import clean_full_answer, llm_collect
 from llm.persona import chitchat_reply, system_prompt
 from rag import index as rag
-from rag.bobohui import merge_bobohui
+from rag.bobohui import ANSWER_RULE, PRESENCE_RULE, merge_bobohui
 from rag.dialogue import (
     RealtimeMemory, family_reply, is_noise_question, prepare_realtime, visit_fact_reply,
 )
@@ -43,19 +43,19 @@ WORK_Q = {
     "kumarajiva": "介绍一下你翻译的金刚经",
 }
 NAME = {
-    "zh": "博博会",
-    "en": "China Museum Expo",
-    "ja": "中国博物館エキスポ",
-    "ko": "중국 박물관 엑스포",
+    "zh": "宽创大厅",
+    "en": "Broadmesse Hall",
+    "ja": "ブロードメッセホール",
+    "ko": "브로드메세 홀",
 }
 NEED_NAME = {"weather", "news", "news_more", "visit", "bobohui", "booth"}
 OLD = ("浪漫与星辰", "贵州省博物馆", "这场商代", "龟兹博物馆", "七十八元", "四十九元", "这场展有我的")
 HAN = re.compile(r"[\u4e00-\u9fff]")
 HALL = (
-    "展会只介绍博博会，不要介绍原先的展，也不要报原先的门票价格。"
-    "问到本人作品或经历时只讲事情本身，不要说这场展有我的作品。"
-    "你人就在博博会现场的宽创展厅里，这是事实，但不要主动报位置。不要说在那里，不要说我听说。只有观众问你在哪里、展厅在哪时，才说我就在这里。讲作品时不要先说我在这里。\n"
-    "用两到三句说完。\n"
+    ANSWER_RULE
+    + "问到本人作品或经历时只讲事情本身，不要说这场展有我的作品。"
+    + PRESENCE_RULE
+    + "用两到三句说完。\n"
 )
 
 
@@ -202,7 +202,7 @@ def _shared_fixed(scene: str, code: str, cache: dict) -> str:
     elif scene == "news_more":
         text = (prepare_realtime("再来一条", mem, None).get("reply") or "").strip()
     elif scene == "visit":
-        text = visit_fact_reply("博博会什么时候开，在哪里举办", None)
+        text = visit_fact_reply("宽创大厅在哪里", None)
     elif scene == "ticket_price":
         text = visit_fact_reply("门票多少钱", None)
     elif scene == "ticket_book":
@@ -237,7 +237,7 @@ def _persona_text(persona, scene: str, code: str) -> tuple:
     if scene == "work":
         return _llm(persona, WORK_Q[persona.id], code), "大模型"
     if scene == "bobohui":
-        return _llm(persona, "介绍一下第十一届博博会", code), "大模型"
+        return _llm(persona, "介绍一下宽创的发展历程", code), "大模型"
     if scene == "booth":
         return _llm(persona, "宽创展台是做什么的", code), "大模型"
     if scene == "guide":
@@ -251,11 +251,11 @@ SCENES = (
     ("weather", "weather", "海口天气", lambda p, code: "今天海口天气怎么样"),
     ("news", "news", "新闻第一条", lambda p, code: "最近有什么新闻"),
     ("news_more", "news", "新闻再来一条", lambda p, code: "再来一条"),
-    ("visit", "visit", "时间地点", lambda p, code: "博博会什么时候开，在哪里举办"),
+    ("visit", "visit", "时间地点", lambda p, code: "宽创大厅在哪里"),
     ("ticket_price", "visit", "问票价", lambda p, code: "门票多少钱"),
     ("ticket_book", "ticket_service", "预约门票", lambda p, code: "帮我预约门票"),
     ("guide", "guide", "展厅导览", lambda p, code: "带我看看这个展厅"),
-    ("bobohui", "knowledge", "介绍博博会", lambda p, code: "介绍一下第十一届博博会"),
+    ("bobohui", "knowledge", "介绍宽创发展", lambda p, code: "介绍一下宽创的发展历程"),
     ("booth", "knowledge", "宽创展台", lambda p, code: "宽创展台是做什么的"),
     ("self", "person", "自我介绍", lambda p, code: "请介绍一下你自己"),
     ("work", "exhibit", "代表作品", lambda p, code: WORK_Q[p.id]),
@@ -280,7 +280,7 @@ def _write_report(rows: list, health: dict) -> None:
             health.get("xvec_only"),
             health.get("sample_rate"),
         ),
-        "- 博博会专名：英语 China Museum Expo，日语 中国博物館エキスポ，韩语 중국 박물관 엑스포",
+        "- 宽创大厅专名：英语 Broadmesse Hall，日语 ブロードメッセホール，韩语 브로드메세 홀",
         "- 新闻口播只保留钩子，不念链接。英语和韩语里的数字用阿拉伯数字。",
         "- 条数 %d，不合格 %d，语音目录 `wav/`" % (len(rows), len(bad)),
         "",
