@@ -307,7 +307,9 @@ VEC_TOPK = 50
 BM25_TOPK = 50
 RRF_K = 60
 RERANK_CAND = 20
-COMPRESS_MAX = 500
+# 资料按原文送入，不再做 500 字浓缩。上下文 4096。
+# 实测约 1.08 字/token。系统提示最长约 1050 token，再留三轮历史和口播，原文合计封在 1800 字。
+PASSAGE_BUDGET = 1800
 MIN_SCORE_RRF = 0.015
 MIN_SCORE_RERANK = 0.50
 

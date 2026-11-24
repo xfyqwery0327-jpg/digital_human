@@ -184,7 +184,7 @@ def search(query: str, top_k: int, category, session: Optional[SessionState] = N
     fused = _prefer_hall_clock(asked, items, fused, persona)
     cand = fused[:RERANK_CAND]
     if rag.HAS_RERANKER and rag.reranker:
-        pairs = [(query, items[i]["text"][:COMPRESS_MAX]) for i, _ in cand]
+        pairs = [(query, items[i].get("text") or "") for i, _ in cand]
         r_scores = rag.reranker.predict(pairs)
         probs = 1.0 / (1.0 + np.exp(-np.array(r_scores)))
         ranked = sorted(zip(cand, probs), key=lambda x: -x[1])

@@ -21,7 +21,7 @@ from rag.dialogue import (
     is_foreign_question, FOREIGN_REPLY, note_hall, realtime_reply,
     suggest_hooks, visit_fact_reply, exhibit_names, titles_from_items, pack_done,
     HALL_INTENTS, is_noise_question, is_relation_question, is_family_question,
-    family_reply, is_life_question, life_reply, relation_reply, rule_intent,
+    family_reply, relation_reply, rule_intent,
 )
 from rag.transcript import transcript_reply
 from services.screen_hooks import (
@@ -270,13 +270,7 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
             if is_family_question(question):
                 aside = True
                 aside_fact = await loop.run_in_executor(
-                    None, lambda: family_reply(question, persona=active()))
-            elif is_life_question(question):
-                life_fact = await loop.run_in_executor(
-                    None, lambda: life_reply(question, persona=active()))
-                if life_fact:
-                    aside = True
-                    aside_fact = life_fact
+                    None, lambda: family_reply(question, persona=persona))
             if aside:
                 reply = aside_fact or refuse_text(persona)
                 print(f"🚫 闲句、认人或家庭问题，不叫大模型: {question[:40]}")
@@ -373,7 +367,8 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                 continue
 
             # 构建上下文
-            contexts = [h["text"][:COMPRESS_MAX] for h in hits]
+            from rag.passages import read_hits
+            contexts = read_hits(hits)
             ref = "\n".join(f"- {c}" for c in contexts)
 
             history_text = ""
@@ -387,7 +382,7 @@ async def _websocket_chat_loop(websocket: WebSocket, persona):
                 if e.text and not is_other_exhibition_query(e.text)
             )
 
-            messages = [{"role": "system", "content": system_prompt()}]
+            messages = [{"role": "system", "content": system_prompt(persona)}]
             for q, a in hall_turns:
                 messages.append({"role": "user", "content": q})
                 messages.append({"role": "assistant", "content": a})

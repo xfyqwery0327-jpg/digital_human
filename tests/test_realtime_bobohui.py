@@ -32,6 +32,9 @@ def test_kumarajiva_prompt_marks_qiuci():
 
 def test_weather_city_and_default_cases():
     assert extract_weather_city("今天天气怎么样") == ""
+    assert extract_weather_city("今天什么天气") == ""
+    assert extract_weather_city("上海什么天气") == "上海"
+    assert rule_intent("今天什么天气") == "weather"
     assert extract_weather_city("今天上海天气") == "上海"
     assert extract_weather_city("上海今天天气") == "上海"
     assert extract_weather_city("北京天气怎么样") == "北京"

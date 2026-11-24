@@ -33,7 +33,7 @@ from rag.visit import visit_hint, guard_hall_clock, filter_spoken_sentence
 from rag.dialogue import (
     is_foreign_question, FOREIGN_REPLY, note_hall,
     rule_intent, is_noise_question, is_relation_question, is_family_question, family_reply,
-    is_life_question, life_reply, relation_reply,
+    relation_reply,
     suggest_hooks, visit_fact_reply, exhibit_names, titles_from_items, HALL_INTENTS,
     RealtimeMemory, intention_event, button_screen_intent,
 )
@@ -815,14 +815,10 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
             await deliver(spoken, "transcript")
         elif is_family_question(user_question):
             fact = await loop.run_in_executor(
-                None, lambda: family_reply(user_question, persona=active()))
+                None, lambda: family_reply(user_question, persona=persona))
             llm_answer = fact or refuse_text()
             print(f"👨‍👩‍👧 家庭问题用资料原句: {user_question[:40]} hit={bool(fact)}")
             await deliver(llm_answer, "knowledge", refused=not fact)
-        elif is_life_question(user_question) and (fact := await loop.run_in_executor(
-                None, lambda: life_reply(user_question, persona=active()))):
-            print(f"📜 生平问题用资料原句: {user_question[:40]}")
-            await deliver(fact, "knowledge")
         elif _looks_chitchat(user_question):
             await deliver(chitchat_reply(user_question, persona), "chitchat")
         elif _command_reply(user_question, dialogue_state):
@@ -842,8 +838,9 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
                 ) else "knowledge"
                 if route_intent in HALL_INTENTS:
                     note_hall(dialogue_state)
+                cat = locked_category(None, persona)
                 hits = await loop.run_in_executor(
-                    None, lambda: search_fn(user_question, 2, locked_category(), None, active()))
+                    None, lambda: search_fn(user_question, 2, cat, None, persona))
                 threshold = MIN_SCORE_RERANK if rag.HAS_RERANKER else MIN_SCORE_RRF
                 from rag.bobohui import merge_bobohui
                 hits = merge_bobohui(user_question, hits, threshold)
@@ -861,7 +858,8 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
                     await send_llm_answer(llm_answer)
                     await send_subtitle(llm_answer)
                 else:
-                    contexts = [h["text"][:COMPRESS_MAX] for h in hits]
+                    from rag.passages import read_hits
+                    contexts = read_hits(hits)
                     ref = "\n".join(f"- {c}" for c in contexts)
                     from rag.speech_lang import output_rule, reply_lang_of
                     from rag.bobohui import PRESENCE_RULE
@@ -874,7 +872,7 @@ async def handle_tts_request(websocket: WebSocket, safe_send, user_question: str
                         f"{PRESENCE_RULE}"
                         f"{output_rule(reply_lang_of(dialogue_state))}/no_think"
                     )
-                    llm_payload = {"messages": [{"role": "system", "content": system_prompt()},
+                    llm_payload = {"messages": [{"role": "system", "content": system_prompt(persona)},
                                                 {"role": "user", "content": user_content}],
                                    "temperature": 0.05, "max_tokens": 300, "stream": True}
 

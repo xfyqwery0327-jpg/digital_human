@@ -33,7 +33,7 @@ from rag.visit import visit_hint, guard_hall_clock
 from rag.dialogue import (
     rule_intent, RealtimeMemory, append_spoken_followup,
     is_noise_question, is_relation_question, is_family_question, family_reply,
-    is_life_question, life_reply, relation_reply,
+    relation_reply,
 )
 from rag.transcript import transcript_reply
 from services.screen_hooks import (
@@ -94,11 +94,6 @@ def _robot_knowledge_turn_locked(question: str, session: SessionState, top_k: in
             return refuse_payload("family", persona)
         log.info("家庭问题用资料原句 query=%s text=%s", question[:80], fact[:160])
         return {"text": fact, "sources": [], "refused": False}
-    if is_life_question(question):
-        fact = life_reply(question, persona=persona)
-        if fact:
-            log.info("生平问题用资料原句 query=%s text=%s", question[:80], fact[:160])
-            return {"text": fact, "sources": [], "refused": False}
 
     hits = search(question, top_k, cat, session, persona=persona)
     threshold = MIN_SCORE_RERANK if rag.HAS_RERANKER else MIN_SCORE_RRF
@@ -118,7 +113,8 @@ def _robot_knowledge_turn_locked(question: str, session: SessionState, top_k: in
         log.info("检索未达标，拒答 query=%s", question[:80])
         return refuse_payload("low_score", persona)
 
-    contexts = [h["text"][:COMPRESS_MAX] for h in hits]
+    from rag.passages import read_hits
+    contexts = read_hits(hits)
     ref = "\n".join(f"- {c}" for c in contexts)
     history_text = ""
     for q, a in iter_hall_history(session.get_context_window(), persona):

@@ -30,7 +30,8 @@ _WEATHER = {}
 _RECENT_NEWS = []
 _RECENT_NEWS_TTL = 30 * 60
 _CITY_FILLER = re.compile(
-    r"请问|帮我|查一下|查询|一下|怎么样|如何|怎样|多少|会不会|是否|"
+    r"请问|帮我|查一下|查询|一下|怎么样|是什么|什么样|什么|咋样|如何|怎样|多少|会不会|是否|"
+    r"哪种|哪个|哪儿|哪里|"
     r"今天|今日|现在|当前|天气|气温|温度|下雨|降雨|降温|升温|预报|情况|"
     r"这边|当地|这里|那里|吗|呢|啊|呀|吧|的"
 )
@@ -359,17 +360,27 @@ def _fetch_news_detail(uniquekey: str) -> str:
 
 
 def _weather_bundle(question: str) -> dict:
+    wanted = extract_weather_city(question)
+    default = clean_city(DEFAULT_WEATHER_CITY) or "海口"
+    city = wanted or default
+    bundle = _weather_cached(city)
+    if bundle.get("text") or city == default:
+        return bundle
+    runtime_log("feed.log", "weather city=%s empty, fallback=%s" % (city, default))
+    return _weather_cached(default)
+
+
+def _weather_cached(city: str) -> dict:
     empty = {
         "text": "", "title": "", "image_url": "", "link": "",
         "url": "", "thumbnail_pic_s": "", "uniquekey": "",
     }
-    city = extract_weather_city(question) or clean_city(DEFAULT_WEATHER_CITY) or "海口"
     now = time.time()
     with _LOCK:
         cached = _WEATHER.get(city)
         if cached and now < float(cached.get("until") or 0):
             return dict(cached["bundle"])
-    place = {"city": city}
+    place = {"city": city, "lat": None, "lon": None}
     lat, lon = _geocode(city)
     place["lat"] = lat
     place["lon"] = lon
